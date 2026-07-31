@@ -1,0 +1,39 @@
+# Local-only: product notes and reference checkouts (not published)
+docs/
+refs/
+
+# Stale path if anyone left a root copy
+atom_memory/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Velora runtime data
+*.db
+velora_data/
+.env
+.env.local
+
+# Node / Desk
+node_modules/
+desk/dist/
+desk/.vite/
+
+# Legacy nested package path (if leftover)
+velora/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

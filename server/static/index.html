@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Velora · Desk</title>
+  <style>
+    :root {
+      --bg: #12141a; --panel: #1a1d26; --line: #2c3140; --fg: #e6e8ef;
+      --dim: #8b91a3; --accent: #5ec8a5; --warn: #e0a35a; --danger: #e08080;
+      --user: #2a3344; --ai: #1e2836;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --sans: "IBM Plex Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; height: 100vh; display: grid; grid-template-rows: auto 1fr;
+      background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans);
+    }
+    header {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel);
+    }
+    .brand { font: 600 13px var(--mono); color: var(--accent); margin-right: 6px; }
+    select, input, button, textarea {
+      background: #222733; border: 1px solid var(--line); color: var(--fg);
+      border-radius: 6px; padding: 6px 10px; font: 13px var(--sans);
+    }
+    button { cursor: pointer; }
+    button:hover { border-color: var(--accent); }
+    button.primary { background: #1f3d36; border-color: #2f5a4a; color: var(--accent); }
+    button.danger { border-color: #6a4040; color: #f0b0b0; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    #meta { color: var(--dim); font: 12px var(--mono); margin-left: auto; }
+    .pill {
+      display: inline-block; padding: 1px 7px; border-radius: 999px;
+      border: 1px solid var(--line); font: 11px var(--mono); color: var(--dim); margin-right: 4px;
+    }
+    .pill.ok { color: var(--accent); border-color: #2f5a4a; }
+    .pill.warn { color: var(--warn); border-color: #5a4a2f; }
+    .pill.bad { color: var(--danger); border-color: #5a2f2f; }
+    .tabs { display: flex; gap: 4px; }
+    .tabs button.on { border-color: var(--accent); color: var(--accent); }
+    .warmth-wrap { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 12px; }
+    .warmth-wrap input[type=range] { width: 120px; accent-color: var(--accent); }
+    #sessionSelect { max-width: 160px; font: 12px var(--mono); }
+    #shell { min-height: 0; display: none; }
+    #shell.show { display: grid; }
+    #shell.chat { grid-template-columns: 1.1fr 1fr; }
+    #shell.memory { grid-template-columns: 300px 1fr; }
+    #shell.settings { grid-template-columns: 1fr; }
+    @media (max-width: 900px) {
+      #shell.chat, #shell.memory { grid-template-columns: 1fr; }
+    }
+    .pane { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+    .pane:last-child { border-right: none; }
+    .pane-title {
+      padding: 8px 12px; font: 12px var(--mono); color: var(--dim);
+      border-bottom: 1px solid var(--line); background: #161922;
+    }
+    #msgs, #logs, #atom-list, #atom-detail { flex: 1; overflow: auto; padding: 12px; }
+    #msgs { display: flex; flex-direction: column; gap: 10px; }
+    .bubble { max-width: 92%; padding: 10px 12px; border-radius: 10px; white-space: pre-wrap; }
+    .bubble.user { align-self: flex-end; background: var(--user); }
+    .bubble.ai { align-self: flex-start; background: var(--ai); }
+    .bubble .who { font: 11px var(--mono); color: var(--dim); margin-bottom: 4px; }
+    #composer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
+    #composer textarea { flex: 1; min-height: 64px; resize: vertical; }
+    .log {
+      border: 1px solid var(--line); border-radius: 8px; background: #161922;
+      overflow: hidden; margin-bottom: 8px;
+    }
+    .log summary {
+      cursor: pointer; padding: 8px 10px; font: 12px var(--mono); color: var(--accent);
+      list-style: none;
+    }
+    .log summary::-webkit-details-marker { display: none; }
+    .log pre {
+      margin: 0; padding: 0 10px 10px; font: 11.5px/1.45 var(--mono); color: #c8ccd8;
+      white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto;
+    }
+    .hint { color: var(--dim); font-size: 12px; }
+    .err { color: var(--danger); padding: 0 12px 8px; font-size: 13px; }
+    .item {
+      display: block; width: 100%; text-align: left; padding: 8px 10px; margin: 2px 0;
+      border: none; border-radius: 6px; background: none; color: var(--fg); cursor: pointer;
+    }
+    .item:hover, .item.on { background: #222733; }
+    .kind { font: 11px var(--mono); color: var(--dim); }
+    .stmt { font-size: 13px; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+    .form { padding: 16px 20px; max-width: 560px; display: flex; flex-direction: column; gap: 10px; }
+    .form label { display: flex; flex-direction: column; gap: 4px; color: var(--dim); font-size: 12px; }
+    .chip {
+      font: 11px var(--mono); padding: 2px 8px; border: 1px solid var(--line);
+      border-radius: 999px; color: var(--dim); margin-right: 6px;
+    }
+    #atom-detail h2 { margin: 0 0 8px; font-size: 18px; }
+    #atom-detail pre {
+      white-space: pre-wrap; background: #222733; padding: 12px; border-radius: 8px;
+      font: 12.5px var(--mono);
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 8px; }
+    td, th { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; }
+    th { color: var(--dim); font-weight: 500; }
+  </style>
+</head>
+<body>
+<header>
+  <span class="brand">Velora</span>
+  <div class="tabs">
+    <button class="on" data-tab="chat">对话</button>
+    <button data-tab="memory">记忆</button>
+    <button data-tab="settings">设置</button>
+  </div>
+  <select id="sessionSelect" title="会话"></select>
+  <button id="btnNew">新会话</button>
+  <label class="warmth-wrap" title="风格">
+    更助理
+    <input type="range" id="warmth" min="0" max="100" value="35" />
+    更陪伴
+    <span id="warmthVal">35</span>
+  </label>
+  <button id="btnCon">手动固化</button>
+  <button id="btnProbe">探测状态</button>
+  <a id="atomUi" href="http://127.0.0.1:8020/ui" target="_blank" style="color:var(--dim);font-size:12px">atom /ui</a>
+  <a id="atomChat" href="http://127.0.0.1:8020/chat" target="_blank" style="color:var(--dim);font-size:12px">atom /chat</a>
+  <span id="meta">初始化中…</span>
+</header>
+
+<section id="shell" class="chat show">
+  <!-- chat -->
+  <div class="pane" data-for="chat">
+    <div class="pane-title">对话</div>
+    <div id="msgs"><div class="hint">同一会话接上上下文；长期记忆会召回。右侧 Debug 默认折叠。</div></div>
+    <div class="err" id="err"></div>
+    <div id="composer">
+      <textarea id="input" placeholder="说点什么…（Enter 发送，Shift+Enter 换行；「请记住」开头会立刻固化）"></textarea>
+      <button class="primary" id="send">发送</button>
+    </div>
+  </div>
+  <div class="pane" data-for="chat">
+    <div class="pane-title">Debug（召回 / prompt / 写入） <button id="btnClearLogs" style="float:right;padding:2px 8px;font-size:11px">清空</button></div>
+    <div id="logs"></div>
+  </div>
+
+  <!-- memory -->
+  <div class="pane" data-for="memory" style="display:none">
+    <div class="pane-title">原子列表</div>
+    <div class="toolbar">
+      <button id="refreshMem">刷新</button>
+      <input id="correction" placeholder="纠正：请记住…" style="flex:1;min-width:140px" />
+      <button id="saveCorr">写入并固化</button>
+    </div>
+    <div id="atom-list"><div class="hint">加载中…</div></div>
+  </div>
+  <div class="pane" data-for="memory" style="display:none">
+    <div class="pane-title">原子详情</div>
+    <div id="atom-detail"><div class="hint">点左侧原子查看 revisions / evidence</div></div>
+  </div>
+
+  <!-- settings -->
+  <div class="pane" data-for="settings" style="display:none">
+    <div class="pane-title">设置（写入本地库，重启保留）</div>
+    <div class="form">
+      <label>LLM Base URL<input id="llm_base_url" /></label>
+      <label>Model<input id="llm_model" /></label>
+      <label>API Key <span id="keyHint"></span><input id="llm_api_key" type="password" placeholder="留空不改" autocomplete="off" /></label>
+      <label>atom-memory Base URL<input id="atom_url" /></label>
+      <label>memory space（只读）<input id="space_uid" readonly /></label>
+      <label>新会话默认 warmth（0 助理 … 100 陪伴）<input id="default_warmth" type="number" min="0" max="100" /></label>
+      <label>预设 / sidecar（只读）<input id="preset_info" readonly /></label>
+      <div id="statusBox" class="hint"></div>
+      <button class="primary" id="saveSettings">保存</button>
+    </div>
+  </div>
+</section>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let sessionId = null;
+let sessionsCache = [];
+let atoms = [];
+let currentKey = null;
+let tab = "chat";
+let warmthSaveTimer = null;
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+  );
+}
+
+function setMeta(html) { $("#meta").innerHTML = html; }
+
+function addLog(title, payload, open = false) {
+  const d = document.createElement("details");
+  d.className = "log";
+  if (open) d.open = true;
+  const t = new Date().toLocaleTimeString();
+  d.innerHTML = `<summary>[${t}] ${esc(title)}</summary><pre>${esc(
+    typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)
+  )}</pre>`;
+  const box = $("#logs");
+  box.prepend(d);
+}
+
+function addBubble(role, text) {
+  const d = document.createElement("div");
+  d.className = "bubble " + (role === "user" ? "user" : "ai");
+  d.innerHTML = `<div class="who">${role}</div><div class="body"></div>`;
+  d.querySelector(".body").textContent = text;
+  $("#msgs").appendChild(d);
+  $("#msgs").scrollTop = $("#msgs").scrollHeight;
+  return d.querySelector(".body");
+}
+
+function showTab(name) {
+  tab = name;
+  document.querySelectorAll(".tabs button").forEach((b) =>
+    b.classList.toggle("on", b.dataset.tab === name)
+  );
+  const shell = $("#shell");
+  shell.className = name + " show";
+  shell.querySelectorAll(".pane").forEach((p) => {
+    p.style.display = p.dataset.for === name ? "flex" : "none";
+  });
+  if (name === "memory") loadAtoms();
+  if (name === "settings") { loadSettings(); probe(); }
+}
+
+document.querySelectorAll(".tabs button").forEach((btn) => {
+  btn.onclick = () => showTab(btn.dataset.tab);
+});
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, {
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+    ...opts,
+  });
+  if (!r.ok) throw new Error(await r.text() || r.statusText);
+  if (r.status === 204) return null;
+  const ct = r.headers.get("content-type") || "";
+  return ct.includes("json") ? r.json() : r.text();
+}
+
+function renderSessionSelect() {
+  const sel = $("#sessionSelect");
+  sel.innerHTML = sessionsCache.map((s) =>
+    `<option value="${esc(s.id)}" ${s.id === sessionId ? "selected" : ""}>${esc(s.id.slice(0, 8))} · w${s.warmth ?? 35}</option>`
+  ).join("");
+}
+
+async function loadSession(id) {
+  sessionId = id;
+  const s = sessionsCache.find((x) => x.id === id);
+  const w = s?.warmth ?? 35;
+  $("#warmth").value = w;
+  $("#warmthVal").textContent = w;
+  const turns = await api("/api/sessions/" + sessionId + "/turns");
+  $("#msgs").innerHTML = "";
+  if (!turns.length) {
+    $("#msgs").innerHTML = '<div class="hint">同一会话接上上下文；长期记忆会召回。右侧 Debug 默认折叠。</div>';
+  } else {
+    turns.forEach((t) => addBubble(t.role, t.content));
+  }
+  renderSessionSelect();
+}
+
+async function refreshSessions(preferId) {
+  sessionsCache = await api("/api/sessions");
+  let s = preferId ? sessionsCache.find((x) => x.id === preferId) : sessionsCache[0];
+  if (!s) {
+    s = await api("/api/sessions", { method: "POST", body: "{}" });
+    sessionsCache = [s, ...sessionsCache];
+  }
+  await loadSession(s.id);
+}
+
+async function init() {
+  await refreshSessions();
+  await probe();
+}
+
+$("#sessionSelect").onchange = () => loadSession($("#sessionSelect").value).catch((e) => {
+  $("#err").textContent = String(e);
+});
+
+$("#warmth").oninput = () => {
+  $("#warmthVal").textContent = $("#warmth").value;
+  clearTimeout(warmthSaveTimer);
+  warmthSaveTimer = setTimeout(async () => {
+    if (!sessionId) return;
+    const s = await api("/api/sessions/" + sessionId, {
+      method: "PATCH",
+      body: JSON.stringify({ warmth: Number($("#warmth").value) }),
+    });
+    const i = sessionsCache.findIndex((x) => x.id === s.id);
+    if (i >= 0) sessionsCache[i] = s; else sessionsCache.unshift(s);
+    renderSessionSelect();
+  }, 300);
+};
+
+async function probe() {
+  try {
+    const st = await api("/api/debug/status");
+    const llm = st.llm || {};
+    const mem = st.memory || {};
+    setMeta(
+      `<span class="pill ${llm.ok ? "ok" : "bad"}">llm ${llm.ok ? "ok" : "fail"}</span>` +
+      `<span class="pill ${mem.ok ? "ok" : "bad"}">memory ${mem.ok ? "ok" : "fail"}</span>` +
+      `<span class="pill">${esc(llm.model || "?")}</span>` +
+      `<span class="pill">${esc((sessionId || "").slice(0, 8))}</span>` +
+      `<span class="pill">${esc(mem.space_uid || "")}</span>`
+    );
+    const box = $("#statusBox");
+    if (box) {
+      box.innerHTML =
+        `<div>LLM: ${llm.ok ? "可达" : "不可达"} · model=<code>${esc(llm.model)}</code> · key=${llm.api_key_set ? "已设" : "空"}</div>` +
+        `<div>Memory: ${mem.ok ? "可达" : "不可达"} · <code>${esc(mem.base_url)}</code></div>` +
+        `<div>models 抽样: <code>${esc(JSON.stringify(llm.models_sample))}</code></div>`;
+    }
+    if (mem.base_url) {
+      $("#atomUi").href = mem.base_url.replace(/\/$/, "") + "/ui?uid=" + encodeURIComponent(mem.space_uid || "");
+      $("#atomChat").href = mem.base_url.replace(/\/$/, "") + "/chat";
+    }
+    return st;
+  } catch (e) {
+    setMeta(`<span class="pill bad">status fail</span> ${esc(e.message)}`);
+  }
+}
+
+async function streamChat(text) {
+  addBubble("user", text);
+  const asst = addBubble("assistant", "");
+  $("#err").textContent = "";
+  addLog("user_message", { text }, true);
+  const res = await fetch("/api/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, text }),
+  });
+  if (!res.ok) {
+    const msg = await res.text();
+    $("#err").textContent = msg;
+    addLog("http_error", msg, true);
+    return;
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "", event = "message", acc = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() || "";
+    for (const line of lines) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) {
+        let data = line.slice(5).trim();
+        try { data = JSON.parse(data); } catch {}
+        if (event === "token" && data && data.text) {
+          acc += data.text;
+          asst.textContent = acc;
+          $("#msgs").scrollTop = $("#msgs").scrollHeight;
+        } else if (event !== "token") {
+          addLog(event, data, event === "error");
+        }
+        if (event === "error" && data && data.message) $("#err").textContent = data.message;
+        event = "message";
+      }
+    }
+  }
+}
+
+$("#send").onclick = async () => {
+  const ta = $("#input");
+  const text = ta.value.trim();
+  if (!text || !sessionId) return;
+  ta.value = "";
+  try { await streamChat(text); } catch (e) { $("#err").textContent = String(e); }
+};
+
+$("#input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    $("#send").click();
+  }
+});
+
+$("#btnNew").onclick = async () => {
+  const s = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ warmth: Number($("#warmth").value) }),
+  });
+  sessionsCache = [s, ...sessionsCache.filter((x) => x.id !== s.id)];
+  await loadSession(s.id);
+  addLog("new_session", s, false);
+  await probe();
+};
+
+$("#btnCon").onclick = async () => {
+  try {
+    const r = await api("/api/memory/consolidate", { method: "POST" });
+    addLog("consolidate", r, true);
+    if (tab === "memory") loadAtoms();
+  } catch (e) {
+    addLog("consolidate_error", String(e), true);
+  }
+};
+
+$("#btnProbe").onclick = () => probe();
+$("#btnClearLogs").onclick = () => { $("#logs").innerHTML = ""; };
+
+async function loadAtoms() {
+  const data = await api("/api/memory/atoms?page=1&page_size=100");
+  atoms = data.results || [];
+  const by = {};
+  for (const a of atoms) (by[a.kind] ||= []).push(a);
+  const list = $("#atom-list");
+  list.innerHTML =
+    Object.keys(by).sort().map((k) => `
+      <div class="kind" style="margin:10px 0 4px">${esc(k)} (${by[k].length})</div>
+      ${by[k].map((a) => `
+        <button class="item" data-key="${esc(a.key)}">
+          <div class="stmt">${esc(a.statement || "")}</div>
+          <div class="kind">${esc(a.key)}</div>
+        </button>`).join("")}
+    `).join("") || '<div class="hint">（空）</div>';
+  list.onclick = (e) => {
+    const btn = e.target.closest("[data-key]");
+    if (btn) openAtom(btn.dataset.key);
+  };
+}
+
+async function openAtom(key) {
+  currentKey = key;
+  [...document.querySelectorAll(".item")].forEach((el) =>
+    el.classList.toggle("on", el.dataset.key === key)
+  );
+  const a = await api("/api/memory/atoms/" + encodeURIComponent(key));
+  const revs = a.revisions || [];
+  const ev = a.evidence || [];
+  $("#atom-detail").innerHTML = `
+    <h2>${esc(a.statement)}</h2>
+    <div style="margin-bottom:12px">
+      <span class="chip">${esc(a.kind)}</span>
+      <span class="chip">${esc(a.key)}</span>
+      <span class="chip">${esc(a.status)}</span>
+      <button class="danger" id="btnArchive">归档</button>
+    </div>
+    <div class="kind">detail</div>
+    <pre>${esc(a.detail || "（空）")}</pre>
+    <div class="kind" style="margin-top:16px">revisions</div>
+    <table><tr><th>seq</th><th>reason</th><th>trigger</th><th>statement</th></tr>
+      ${revs.map((r) => `<tr><td>${r.seq}</td><td>${esc(r.change_reason)}</td>
+        <td>${esc(r.trigger)}</td><td>${esc(r.statement)}</td></tr>`).join("") ||
+        "<tr><td colspan=4>（无）</td></tr>"}
+    </table>
+    <div class="kind" style="margin-top:16px">evidence</div>
+    <table><tr><th>rev</th><th>source</th><th>kind</th><th>at</th></tr>
+      ${ev.map((e) => `<tr><td>${e.revision_seq}</td><td>${e.source_id}</td>
+        <td>${esc(e.source_kind)}</td><td>${esc(e.source_occurred_at)}</td></tr>`).join("") ||
+        "<tr><td colspan=4>（无）</td></tr>"}
+    </table>`;
+  $("#btnArchive").onclick = async () => {
+    await api("/api/memory/atoms/" + encodeURIComponent(key) + "/archive", { method: "POST" });
+    $("#atom-detail").innerHTML = '<div class="hint">已归档</div>';
+    loadAtoms();
+  };
+}
+
+$("#refreshMem").onclick = () => loadAtoms().catch((e) => alert(e.message));
+$("#saveCorr").onclick = async () => {
+  const text = $("#correction").value.trim();
+  if (!text) return;
+  await api("/api/memory/corrections", { method: "POST", body: JSON.stringify({ text }) });
+  $("#correction").value = "";
+  loadAtoms();
+};
+
+async function loadSettings() {
+  const s = await api("/api/settings");
+  $("#llm_base_url").value = s.llm_base_url;
+  $("#llm_model").value = s.llm_model;
+  $("#atom_url").value = s.atom_memory_base_url;
+  $("#space_uid").value = s.memory_space_uid;
+  $("#default_warmth").value = s.default_warmth ?? 35;
+  $("#preset_info").value = `${s.preset_id || "—"} · sidecar=${s.start_memory_sidecar ? "on" : "off"}`;
+  $("#keyHint").textContent = s.llm_api_key_set ? "（已配置，留空不改）" : "";
+}
+
+$("#saveSettings").onclick = async () => {
+  const body = {
+    llm_base_url: $("#llm_base_url").value,
+    llm_model: $("#llm_model").value,
+    atom_memory_base_url: $("#atom_url").value,
+    default_warmth: Number($("#default_warmth").value),
+  };
+  const key = $("#llm_api_key").value;
+  if (key) body.llm_api_key = key;
+  await api("/api/settings", { method: "PUT", body: JSON.stringify(body) });
+  $("#llm_api_key").value = "";
+  await loadSettings();
+  await probe();
+  addLog("settings_saved", body, false);
+};
+
+init().catch((e) => { $("#err").textContent = String(e); });
+</script>
+</body>
+</html>

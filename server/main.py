@@ -1,0 +1,111 @@
+"""Velora FastAPI entrypoint."""
+
+from __future__ import annotations
+
+import logging
+from contextlib import asynccontextmanager
+
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from server.api import chat, debug, memory, sessions, settings as settings_api
+from server.app_state import build_app_state
+from server.config import get_settings
+from server.core.memory.sidecar import start_memory_sidecar
+from server.core.settings_store import load_settings
+
+_STATIC = Path(__file__).resolve().parent / "static"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("velora")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings = get_settings()
+    state = build_app_state(settings)
+    await state.store.init()
+    await load_settings(state.store, state.settings, state.provider)
+    # memory client may need URL from persisted settings
+    state.memory.base_url = state.settings.atom_memory_base_url.rstrip("/")
+    state.memory.api_key = state.settings.atom_memory_api_key
+    state.memory_sidecar = start_memory_sidecar(state.settings)
+    state.consolidate_job.start()
+    try:
+        await state.memory.ensure_space(state.settings.memory_space_uid)
+    except Exception:
+        logger.warning(
+            "atom-memory unreachable at %s — chat will degrade without recall",
+            state.settings.atom_memory_base_url,
+        )
+    app.state.velora = state
+    logger.info(
+        "Velora ready on %s:%s (llm=%s model=%s sidecar=%s)",
+        state.settings.host,
+        state.settings.port,
+        state.settings.llm_base_url,
+        state.settings.llm_model,
+        bool(state.memory_sidecar and state.memory_sidecar.started_by_us),
+    )
+    yield
+    await state.consolidate_job.stop()
+    if state.memory_sidecar is not None:
+        state.memory_sidecar.stop()
+    await state.store.close()
+
+
+def create_app() -> FastAPI:
+    settings = get_settings()
+    app = FastAPI(title="Velora", version="0.1.0", lifespan=lifespan)
+    origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins or ["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.include_router(sessions.router)
+    app.include_router(chat.router)
+    app.include_router(memory.router)
+    app.include_router(settings_api.router)
+    app.include_router(debug.router)
+
+    if _STATIC.is_dir():
+        app.mount("/assets", StaticFiles(directory=_STATIC), name="assets")
+
+    @app.get("/health")
+    async def health() -> dict:
+        return {"status": "ok", "service": "velora"}
+
+    @app.get("/")
+    async def desk_index() -> FileResponse:
+        return FileResponse(_STATIC / "index.html")
+
+    return app
+
+
+app = create_app()
+
+
+def main() -> None:
+    import uvicorn
+
+    settings = get_settings()
+    uvicorn.run(
+        "server.main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=False,
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,19 @@
+{
+  "id": "local-default",
+  "name": "Local default stack",
+  "description": "Velora desk + atom-memory sidecar on loopback (HTTP, process-separated).",
+  "velora": {
+    "host": "127.0.0.1",
+    "port": 8030,
+    "atom_memory_base_url": "http://127.0.0.1:8020",
+    "memory_space_uid": "velora-default"
+  },
+  "sidecar": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8020,
+    "app": "atom_memory.main:app",
+    "database_url": "sqlite:///./velora_data/atom_memory.db",
+    "sync_llm_to_memory": true
+  }
+}
