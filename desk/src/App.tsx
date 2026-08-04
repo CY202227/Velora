@@ -4,6 +4,7 @@ import {
   streamChat,
   type AtomRow,
   type DebugStatus,
+  type MemorySummary,
   type Session,
   type Settings,
   type Turn,
@@ -25,11 +26,14 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [atoms, setAtoms] = useState<AtomRow[]>([]);
+  const [summary, setSummary] = useState<MemorySummary | null>(null);
   const [atomDetail, setAtomDetail] = useState<AtomRow | null>(null);
   const [correction, setCorrection] = useState("");
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [status, setStatus] = useState<DebugStatus | null>(null);
   const [warmth, setWarmth] = useState(35);
+  const [memHint, setMemHint] = useState<string | null>(null);
+  const [debugOn, setDebugOn] = useState(() => localStorage.getItem("velora_debug") === "1");
   const bottomRef = useRef<HTMLDivElement>(null);
   const warmthTimer = useRef<number | null>(null);
 
@@ -44,6 +48,11 @@ export default function App() {
     setLogs((xs) => [item, ...xs].slice(0, 80));
   }
 
+  function toggleDebug(on: boolean) {
+    setDebugOn(on);
+    localStorage.setItem("velora_debug", on ? "1" : "0");
+  }
+
   async function probe() {
     try {
       setStatus(await api.debugStatus());
@@ -55,8 +64,15 @@ export default function App() {
   async function selectSession(s: Session) {
     setSession(s);
     setWarmth(s.warmth ?? 35);
+    setMemHint(null);
     const turns = await api.listTurns(s.id);
     setMsgs(turns.map((t: Turn) => ({ role: t.role as "user" | "assistant", content: t.content })));
+  }
+
+  async function refreshMemory() {
+    const [sum, data] = await Promise.all([api.memorySummary(), api.listAtoms()]);
+    setSummary(sum);
+    setAtoms(data.results || []);
   }
 
   useEffect(() => {
@@ -82,17 +98,8 @@ export default function App() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [msgs, tab]);
 
-  async function refreshAtoms() {
-    try {
-      const data = await api.listAtoms();
-      setAtoms(data.results || []);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
   useEffect(() => {
-    if (tab === "memory") void refreshAtoms();
+    if (tab === "memory") void refreshMemory().catch((e) => setError(String(e)));
     if (tab === "settings") void probe();
   }, [tab]);
 
@@ -114,9 +121,11 @@ export default function App() {
     setInput("");
     setBusy(true);
     setError(null);
+    setMemHint(null);
     pushLog("user_message", { text }, false);
     setMsgs((m) => [...m, { role: "user", content: text }, { role: "assistant", content: "", streaming: true }]);
     let acc = "";
+    const hints: string[] = [];
     try {
       await streamChat(session.id, text, {
         onToken: (t) => {
@@ -130,6 +139,15 @@ export default function App() {
         onEvent: (type, data) => {
           if (type === "token") return;
           pushLog(type, data, type === "error");
+          if (type === "memory_recall" && data && typeof data === "object" && "has_block" in data) {
+            if ((data as { has_block?: boolean }).has_block) hints.push("本轮用到了长期记忆");
+          }
+          if (type === "persisted" && data && typeof data === "object" && "memory_wrote" in data) {
+            const p = data as { memory_wrote?: boolean; consolidated?: boolean };
+            if (p.memory_wrote) {
+              hints.push(p.consolidated ? "本轮已写入记忆并固化" : "本轮已写入记忆");
+            }
+          }
         },
         onError: (msg) => setError(msg),
       });
@@ -138,6 +156,9 @@ export default function App() {
         copy[copy.length - 1] = { role: "assistant", content: acc || copy[copy.length - 1].content };
         return copy;
       });
+      if (settings?.show_memory_hints !== false && hints.length) {
+        setMemHint([...new Set(hints)].join(" · "));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -164,25 +185,19 @@ export default function App() {
   async function saveSettings(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
-    const body: {
-      llm_base_url: string;
-      llm_model: string;
-      llm_api_key?: string;
-      tts_enabled: boolean;
-      atom_memory_base_url: string;
-      default_warmth: number;
-    } = {
+    const body = {
       llm_base_url: String(fd.get("llm_base_url") || ""),
       llm_model: String(fd.get("llm_model") || ""),
       tts_enabled: fd.get("tts_enabled") === "on",
+      show_memory_hints: fd.get("show_memory_hints") === "on",
       atom_memory_base_url: String(fd.get("atom_memory_base_url") || ""),
       default_warmth: Number(fd.get("default_warmth") || 35),
+      llm_api_key: undefined as string | undefined,
     };
     const key = String(fd.get("llm_api_key") || "");
     if (key) body.llm_api_key = key;
     const next = await api.updateSettings(body);
     setSettings(next);
-    pushLog("settings_saved", { ...body, llm_api_key: key ? "(set)" : undefined });
     await probe();
   }
 
@@ -195,7 +210,7 @@ export default function App() {
   const space = status?.memory.space_uid || settings?.memory_space_uid || "";
 
   return (
-    <div className="app">
+    <div className={`app ${debugOn ? "debug-on" : ""}`}>
       <nav>
         <div className="brand">
           Velora
@@ -228,53 +243,60 @@ export default function App() {
         </label>
         <label className="warmth-pick">
           <span>更助理</span>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={warmth}
-            onChange={(e) => onWarmthChange(Number(e.target.value))}
-          />
+          <input type="range" min={0} max={100} value={warmth} onChange={(e) => onWarmthChange(Number(e.target.value))} />
           <span>更陪伴 ({warmth})</span>
+        </label>
+        <label className="chk-inline">
+          <input type="checkbox" checked={debugOn} onChange={(e) => toggleDebug(e.target.checked)} />
+          调试
         </label>
         <div className="nav-actions">
           <button type="button" className="btn ghost" onClick={() => void newSession()}>
             新会话
           </button>
-          <button
-            type="button"
-            className="btn ghost"
-            onClick={() => void api.consolidate().then((r) => pushLog("consolidate", r, false))}
-          >
-            手动固化
-          </button>
-          <button type="button" className="btn ghost" onClick={() => void probe()}>
-            探测状态
-          </button>
+          {debugOn && (
+            <>
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => void api.consolidate().then((r) => pushLog("consolidate", r, false))}
+              >
+                手动固化
+              </button>
+              <button type="button" className="btn ghost" onClick={() => void probe()}>
+                探测状态
+              </button>
+            </>
+          )}
         </div>
         <div className="status-pills">
           <span className={`pill ${status?.llm.ok ? "ok" : "bad"}`}>llm {status?.llm.ok ? "ok" : "?"}</span>
           <span className={`pill ${status?.memory.ok ? "ok" : "bad"}`}>
             memory {status?.memory.ok ? "ok" : "?"}
           </span>
-          <span className="pill">{status?.llm.model || settings?.llm_model || "—"}</span>
-          <span className="pill">{session?.id.slice(0, 8) || "—"}</span>
         </div>
-        <div className="ext-links">
-          <a href={`${memBase.replace(/\/$/, "")}/ui?uid=${encodeURIComponent(space)}`} target="_blank" rel="noreferrer">
-            atom /ui
-          </a>
-          <a href={`${memBase.replace(/\/$/, "")}/chat`} target="_blank" rel="noreferrer">
-            atom /chat
-          </a>
-        </div>
+        {debugOn && (
+          <div className="ext-links">
+            <a href={`${memBase.replace(/\/$/, "")}/ui?uid=${encodeURIComponent(space)}`} target="_blank" rel="noreferrer">
+              atom /ui
+            </a>
+          </div>
+        )}
       </nav>
       <main>
         {tab === "chat" && (
-          <div className="split">
+          <div className={`split ${debugOn ? "" : "single"}`}>
             <div className="panel">
               <h1>{settings?.persona_name || "日常助理"}</h1>
-              <p className="sub">每轮召回 → 组 prompt → 流式回复；右侧 Debug 默认折叠。</p>
+              <p className="sub">同一会话接上上下文；值得留下的会记入长期记忆。</p>
+              {memHint && (
+                <div className="mem-hint">
+                  <span>{memHint}</span>
+                  <button type="button" className="btn ghost" onClick={() => setMemHint(null)}>
+                    关闭
+                  </button>
+                </div>
+              )}
               <div className="messages">
                 {msgs.map((m, i) => (
                   <div key={i} className={`bubble ${m.role}`}>
@@ -302,39 +324,40 @@ export default function App() {
                 </button>
               </div>
             </div>
-            <div className="panel debug">
-              <div className="debug-head">
-                <h1>Debug</h1>
-                <button type="button" className="btn ghost" onClick={() => setLogs([])}>
-                  清空
-                </button>
+            {debugOn && (
+              <div className="panel debug">
+                <div className="debug-head">
+                  <h1>Debug</h1>
+                  <button type="button" className="btn ghost" onClick={() => setLogs([])}>
+                    清空
+                  </button>
+                </div>
+                <div className="log-list">
+                  {logs.length === 0 && <p className="sub">发送消息后出现事件。</p>}
+                  {logs.map((l) => (
+                    <details key={l.id} className="log" open={l.open}>
+                      <summary>
+                        [{l.t}] {l.title}
+                      </summary>
+                      <pre>{typeof l.payload === "string" ? l.payload : JSON.stringify(l.payload, null, 2)}</pre>
+                    </details>
+                  ))}
+                </div>
               </div>
-              <p className="sub">memory_recall / prompt_ready / persisted</p>
-              <div className="log-list">
-                {logs.length === 0 && <p className="sub">发送一条消息后这里会出现事件。</p>}
-                {logs.map((l) => (
-                  <details key={l.id} className="log" open={l.open}>
-                    <summary>
-                      [{l.t}] {l.title}
-                    </summary>
-                    <pre>{typeof l.payload === "string" ? l.payload : JSON.stringify(l.payload, null, 2)}</pre>
-                  </details>
-                ))}
-              </div>
-            </div>
+            )}
           </div>
         )}
 
         {tab === "memory" && (
           <div className="split memory">
             <div className="panel">
-              <h1>记忆</h1>
-              <p className="sub">atom-memory 原子列表 · 点开看 revisions / evidence</p>
+              <h1>我记得什么</h1>
+              <p className="sub">{summary?.headline || "加载中…"}</p>
               <div className="row">
-                <button type="button" className="btn ghost" onClick={() => void refreshAtoms()}>
+                <button type="button" className="btn ghost" onClick={() => void refreshMemory()}>
                   刷新
                 </button>
-                <button type="button" className="btn ghost" onClick={() => void api.consolidate().then(refreshAtoms)}>
+                <button type="button" className="btn ghost" onClick={() => void api.consolidate().then(refreshMemory)}>
                   立即固化
                 </button>
               </div>
@@ -354,115 +377,96 @@ export default function App() {
                   onClick={() =>
                     void api.postCorrection(correction.trim()).then(() => {
                       setCorrection("");
-                      return refreshAtoms();
+                      return refreshMemory();
                     })
                   }
                 >
                   写入并固化
                 </button>
               </div>
-              {error && <div className="error">{error}</div>}
-              <div className="atom-list">
-                {atoms.length === 0 && <p className="sub">还没有原子记忆。</p>}
-                {Object.keys(atomsByKind)
-                  .sort()
-                  .map((kind) => (
-                    <div key={kind}>
-                      <div className="kind-label">
-                        {kind} ({atomsByKind[kind].length})
-                      </div>
-                      {atomsByKind[kind].map((a) => (
-                        <button
-                          type="button"
-                          className={`atom-btn ${atomDetail?.key === a.key ? "on" : ""}`}
-                          key={a.key}
-                          onClick={() => void openAtom(a.key)}
-                        >
-                          <div>{a.statement}</div>
-                          <div className="meta">{a.key}</div>
-                        </button>
-                      ))}
+              <div className="summary-sections">
+                {(summary?.sections || []).map((sec) => (
+                  <div key={sec.kind} className="summary-section">
+                    <div className="kind-label">
+                      {sec.label}
+                      <button
+                        type="button"
+                        className="btn danger"
+                        style={{ marginLeft: "0.5rem", padding: "0.2rem 0.5rem", fontSize: "0.75rem" }}
+                        onClick={() => {
+                          if (!confirm(`确认归档「${sec.label}」下的记忆？`)) return;
+                          void api.archiveKind(sec.kind).then(refreshMemory);
+                        }}
+                      >
+                        归档此类
+                      </button>
                     </div>
-                  ))}
+                    {sec.items.map((it) => (
+                      <button
+                        type="button"
+                        className={`atom-btn ${atomDetail?.key === it.key ? "on" : ""}`}
+                        key={it.key}
+                        onClick={() => void openAtom(it.key)}
+                      >
+                        <div>{it.statement}</div>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+                {summary && summary.total === 0 && (
+                  <p className="sub">还没有记住什么。可以说「请记住…」。</p>
+                )}
               </div>
+              <details className="all-atoms">
+                <summary>全部条目</summary>
+                <div className="atom-list">
+                  {Object.keys(atomsByKind)
+                    .sort()
+                    .map((kind) => (
+                      <div key={kind}>
+                        <div className="kind-label">
+                          {kind} ({atomsByKind[kind].length})
+                        </div>
+                        {atomsByKind[kind].map((a) => (
+                          <button
+                            type="button"
+                            className={`atom-btn ${atomDetail?.key === a.key ? "on" : ""}`}
+                            key={a.key}
+                            onClick={() => void openAtom(a.key)}
+                          >
+                            <div>{a.statement}</div>
+                            <div className="meta">{a.key}</div>
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                </div>
+              </details>
+              {error && <div className="error">{error}</div>}
             </div>
             <div className="panel">
-              <h1>原子详情</h1>
-              {!atomDetail && <p className="sub">选择左侧原子</p>}
+              <h1>详情</h1>
+              {!atomDetail && <p className="sub">选择一条记忆</p>}
               {atomDetail && (
                 <>
                   <h2 className="atom-title">{atomDetail.statement}</h2>
                   <div className="row">
                     <span className="pill">{atomDetail.kind}</span>
                     <span className="pill">{atomDetail.key}</span>
-                    <span className="pill">{atomDetail.status || "—"}</span>
                     <button
                       type="button"
                       className="btn danger"
                       onClick={() =>
                         void api.archiveAtom(atomDetail.key).then(() => {
                           setAtomDetail(null);
-                          return refreshAtoms();
+                          return refreshMemory();
                         })
                       }
                     >
                       归档
                     </button>
                   </div>
-                  <p className="sub">detail</p>
                   <pre className="code">{atomDetail.detail || "（空）"}</pre>
-                  <p className="sub">revisions</p>
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>seq</th>
-                        <th>reason</th>
-                        <th>trigger</th>
-                        <th>statement</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(atomDetail.revisions || []).map((r) => (
-                        <tr key={r.seq}>
-                          <td>{r.seq}</td>
-                          <td>{r.change_reason}</td>
-                          <td>{r.trigger}</td>
-                          <td>{r.statement}</td>
-                        </tr>
-                      ))}
-                      {(atomDetail.revisions || []).length === 0 && (
-                        <tr>
-                          <td colSpan={4}>（无）</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                  <p className="sub">evidence</p>
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>rev</th>
-                        <th>source</th>
-                        <th>kind</th>
-                        <th>at</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(atomDetail.evidence || []).map((e, i) => (
-                        <tr key={i}>
-                          <td>{e.revision_seq}</td>
-                          <td>{e.source_id}</td>
-                          <td>{e.source_kind}</td>
-                          <td>{e.source_occurred_at}</td>
-                        </tr>
-                      ))}
-                      {(atomDetail.evidence || []).length === 0 && (
-                        <tr>
-                          <td colSpan={4}>（无）</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
                 </>
               )}
             </div>
@@ -473,7 +477,7 @@ export default function App() {
           <div className="panel">
             <h1>设置</h1>
             <p className="sub">
-              预设 {settings.preset_id} · sidecar {settings.start_memory_sidecar ? "on" : "off"}（环境变量控制拉起）
+              预设 {settings.preset_id} · sidecar {settings.start_memory_sidecar ? "on" : "off"}
             </p>
             <form className="form" onSubmit={(e) => void saveSettings(e)}>
               <label>
@@ -488,9 +492,13 @@ export default function App() {
                 API Key {settings.llm_api_key_set ? "（已配置，留空不改）" : ""}
                 <input name="llm_api_key" type="password" placeholder="sk-… / EMPTY" autoComplete="off" />
               </label>
-              <label style={{ gridTemplateColumns: "auto 1fr", alignItems: "center" }}>
+              <label className="chk-inline">
                 <input name="tts_enabled" type="checkbox" defaultChecked={settings.tts_enabled} />
-                TTS（v0 未接通，仅保存）
+                TTS（未接通）
+              </label>
+              <label className="chk-inline">
+                <input name="show_memory_hints" type="checkbox" defaultChecked={settings.show_memory_hints} />
+                对话中显示记忆提示
               </label>
               <label>
                 atom-memory Base URL
@@ -511,26 +519,10 @@ export default function App() {
                   key={settings.default_warmth}
                 />
               </label>
-              <label>
-                memory space
-                <input value={settings.memory_space_uid} readOnly />
-              </label>
               <button type="submit" className="btn">
                 保存
               </button>
             </form>
-            {status && (
-              <pre className="code status-dump">
-                {JSON.stringify(
-                  {
-                    llm: status.llm,
-                    memory: { ok: status.memory.ok, base_url: status.memory.base_url, space_uid: status.memory.space_uid },
-                  },
-                  null,
-                  2,
-                )}
-              </pre>
-            )}
           </div>
         )}
       </main>

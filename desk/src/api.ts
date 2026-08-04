@@ -39,6 +39,7 @@ export type Settings = {
   atom_memory_base_url: string;
   memory_space_uid: string;
   tts_enabled: boolean;
+  show_memory_hints: boolean;
   default_warmth: number;
   preset_id: string;
   start_memory_sidecar: boolean;
@@ -64,6 +65,17 @@ export type AtomRow = {
     source_id?: string;
     source_kind?: string;
     source_occurred_at?: string;
+  }>;
+};
+
+export type MemorySummary = {
+  total: number;
+  headline: string;
+  sections: Array<{
+    kind: string;
+    label: string;
+    count: number;
+    items: Array<{ key: string; statement: string }>;
   }>;
 };
 
@@ -99,15 +111,22 @@ export const api = {
       llm_model: string;
       llm_api_key: string;
       tts_enabled: boolean;
+      show_memory_hints: boolean;
       atom_memory_base_url: string;
       default_warmth: number;
     }>,
   ) => json<Settings>("/api/settings", { method: "PUT", body: JSON.stringify(body) }),
+  memorySummary: () => json<MemorySummary>("/api/memory/summary"),
   listAtoms: () =>
     json<{ count: number; results: AtomRow[] }>("/api/memory/atoms?page=1&page_size=100"),
   getAtom: (key: string) => json<AtomRow>(`/api/memory/atoms/${encodeURIComponent(key)}`),
   archiveAtom: (key: string) =>
     json(`/api/memory/atoms/${encodeURIComponent(key)}/archive`, { method: "POST" }),
+  archiveKind: (kind: string) =>
+    json<{ ok: boolean; archived: number; failed: number }>("/api/memory/atoms/archive-kind", {
+      method: "POST",
+      body: JSON.stringify({ kind }),
+    }),
   postCorrection: (text: string) =>
     json("/api/memory/corrections", { method: "POST", body: JSON.stringify({ text }) }),
   consolidate: () => json("/api/memory/consolidate", { method: "POST" }),

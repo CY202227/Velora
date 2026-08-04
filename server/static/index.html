@@ -37,33 +37,44 @@
       border: 1px solid var(--line); font: 11px var(--mono); color: var(--dim); margin-right: 4px;
     }
     .pill.ok { color: var(--accent); border-color: #2f5a4a; }
-    .pill.warn { color: var(--warn); border-color: #5a4a2f; }
     .pill.bad { color: var(--danger); border-color: #5a2f2f; }
     .tabs { display: flex; gap: 4px; }
     .tabs button.on { border-color: var(--accent); color: var(--accent); }
     .warmth-wrap { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 12px; }
-    .warmth-wrap input[type=range] { width: 120px; accent-color: var(--accent); }
-    #sessionSelect { max-width: 160px; font: 12px var(--mono); }
+    .warmth-wrap input[type=range] { width: 110px; accent-color: var(--accent); }
+    #sessionSelect { max-width: 150px; font: 12px var(--mono); }
+    .dbg-only { display: none; }
+    body.debug-on .dbg-only { display: inline-flex; align-items: center; gap: 6px; }
     #shell { min-height: 0; display: none; }
     #shell.show { display: grid; }
-    #shell.chat { grid-template-columns: 1.1fr 1fr; }
-    #shell.memory { grid-template-columns: 300px 1fr; }
+    #shell.chat { grid-template-columns: 1fr; }
+    #shell.chat.debug-on { grid-template-columns: 1.2fr 1fr; }
+    #shell.memory { grid-template-columns: 1.2fr 1fr; }
     #shell.settings { grid-template-columns: 1fr; }
     @media (max-width: 900px) {
-      #shell.chat, #shell.memory { grid-template-columns: 1fr; }
+      #shell.chat.debug-on, #shell.memory { grid-template-columns: 1fr; }
     }
     .pane { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
     .pane:last-child { border-right: none; }
+    .pane.debug-pane { display: none; }
+    #shell.chat.debug-on .pane.debug-pane { display: flex; }
     .pane-title {
       padding: 8px 12px; font: 12px var(--mono); color: var(--dim);
       border-bottom: 1px solid var(--line); background: #161922;
     }
-    #msgs, #logs, #atom-list, #atom-detail { flex: 1; overflow: auto; padding: 12px; }
+    #msgs, #logs, #atom-list, #atom-detail, #summaryBox { flex: 1; overflow: auto; padding: 12px; }
     #msgs { display: flex; flex-direction: column; gap: 10px; }
     .bubble { max-width: 92%; padding: 10px 12px; border-radius: 10px; white-space: pre-wrap; }
     .bubble.user { align-self: flex-end; background: var(--user); }
     .bubble.ai { align-self: flex-start; background: var(--ai); }
     .bubble .who { font: 11px var(--mono); color: var(--dim); margin-bottom: 4px; }
+    .mem-hint {
+      display: none; margin: 0 12px; padding: 8px 10px; border-radius: 8px;
+      background: rgba(94, 200, 165, 0.12); border: 1px solid #2f5a4a;
+      color: var(--accent); font-size: 13px; align-items: center; gap: 8px;
+    }
+    .mem-hint.show { display: flex; }
+    .mem-hint button { margin-left: auto; padding: 2px 8px; font-size: 12px; }
     #composer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
     #composer textarea { flex: 1; min-height: 64px; resize: vertical; }
     .log {
@@ -95,14 +106,24 @@
       font: 11px var(--mono); padding: 2px 8px; border: 1px solid var(--line);
       border-radius: 999px; color: var(--dim); margin-right: 6px;
     }
+    .summary-card {
+      background: #161922; border: 1px solid var(--line); border-radius: 10px;
+      padding: 14px 16px; margin-bottom: 12px;
+    }
+    .summary-card h2 { margin: 0 0 10px; font-size: 16px; font-weight: 600; }
+    .section { margin-top: 12px; }
+    .section h3 { margin: 0 0 6px; font-size: 12px; color: var(--dim); font-family: var(--mono); }
     #atom-detail h2 { margin: 0 0 8px; font-size: 18px; }
-    #atom-detail pre {
+    #atom-detail pre, .code {
       white-space: pre-wrap; background: #222733; padding: 12px; border-radius: 8px;
       font: 12.5px var(--mono);
     }
     table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 8px; }
     td, th { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; }
     th { color: var(--dim); font-weight: 500; }
+    details.all-atoms { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+    details.all-atoms > summary { cursor: pointer; color: var(--dim); font: 12px var(--mono); }
+    label.chk { flex-direction: row !important; align-items: center; gap: 8px; }
   </style>
 </head>
 <body>
@@ -121,56 +142,68 @@
     更陪伴
     <span id="warmthVal">35</span>
   </label>
-  <button id="btnCon">手动固化</button>
-  <button id="btnProbe">探测状态</button>
-  <a id="atomUi" href="http://127.0.0.1:8020/ui" target="_blank" style="color:var(--dim);font-size:12px">atom /ui</a>
-  <a id="atomChat" href="http://127.0.0.1:8020/chat" target="_blank" style="color:var(--dim);font-size:12px">atom /chat</a>
+  <label class="warmth-wrap"><input type="checkbox" id="dbgToggle" /> 调试</label>
+  <span class="dbg-only">
+    <button id="btnCon">手动固化</button>
+    <button id="btnProbe">探测状态</button>
+    <a id="atomUi" href="http://127.0.0.1:8020/ui" target="_blank" style="color:var(--dim);font-size:12px">atom /ui</a>
+  </span>
   <span id="meta">初始化中…</span>
 </header>
 
 <section id="shell" class="chat show">
-  <!-- chat -->
   <div class="pane" data-for="chat">
     <div class="pane-title">对话</div>
-    <div id="msgs"><div class="hint">同一会话接上上下文；长期记忆会召回。右侧 Debug 默认折叠。</div></div>
+    <div id="memHint" class="mem-hint">
+      <span id="memHintText"></span>
+      <button type="button" id="memHintClose">关闭</button>
+    </div>
+    <div id="msgs"><div class="hint">同一会话会接上上下文；值得留下的会记入长期记忆。</div></div>
     <div class="err" id="err"></div>
     <div id="composer">
-      <textarea id="input" placeholder="说点什么…（Enter 发送，Shift+Enter 换行；「请记住」开头会立刻固化）"></textarea>
+      <textarea id="input" placeholder="说点什么…（Enter 发送；「请记住」开头会立刻固化）"></textarea>
       <button class="primary" id="send">发送</button>
     </div>
   </div>
-  <div class="pane" data-for="chat">
-    <div class="pane-title">Debug（召回 / prompt / 写入） <button id="btnClearLogs" style="float:right;padding:2px 8px;font-size:11px">清空</button></div>
+  <div class="pane debug-pane" data-for="chat">
+    <div class="pane-title">Debug <button id="btnClearLogs" style="float:right;padding:2px 8px;font-size:11px">清空</button></div>
     <div id="logs"></div>
   </div>
 
-  <!-- memory -->
   <div class="pane" data-for="memory" style="display:none">
-    <div class="pane-title">原子列表</div>
+    <div class="pane-title">我记得什么</div>
     <div class="toolbar">
       <button id="refreshMem">刷新</button>
       <input id="correction" placeholder="纠正：请记住…" style="flex:1;min-width:140px" />
       <button id="saveCorr">写入并固化</button>
+      <button id="btnConMem">立即固化</button>
     </div>
-    <div id="atom-list"><div class="hint">加载中…</div></div>
+    <div id="summaryBox"><div class="hint">加载中…</div></div>
+    <details class="all-atoms" style="padding:0 12px 12px">
+      <summary>全部条目</summary>
+      <div id="atom-list" style="padding:8px 0"></div>
+    </details>
   </div>
   <div class="pane" data-for="memory" style="display:none">
-    <div class="pane-title">原子详情</div>
-    <div id="atom-detail"><div class="hint">点左侧原子查看 revisions / evidence</div></div>
+    <div class="pane-title">详情</div>
+    <div id="atom-detail"><div class="hint">点左侧或摘要中的条目查看详情</div></div>
   </div>
 
-  <!-- settings -->
   <div class="pane" data-for="settings" style="display:none">
-    <div class="pane-title">设置（写入本地库，重启保留）</div>
+    <div class="pane-title">设置</div>
     <div class="form">
       <label>LLM Base URL<input id="llm_base_url" /></label>
       <label>Model<input id="llm_model" /></label>
       <label>API Key <span id="keyHint"></span><input id="llm_api_key" type="password" placeholder="留空不改" autocomplete="off" /></label>
       <label>atom-memory Base URL<input id="atom_url" /></label>
       <label>memory space（只读）<input id="space_uid" readonly /></label>
-      <label>新会话默认 warmth（0 助理 … 100 陪伴）<input id="default_warmth" type="number" min="0" max="100" /></label>
+      <label>新会话默认 warmth<input id="default_warmth" type="number" min="0" max="100" /></label>
+      <label class="chk"><input type="checkbox" id="show_memory_hints" /> 对话中显示记忆提示</label>
       <label>预设 / sidecar（只读）<input id="preset_info" readonly /></label>
-      <div id="statusBox" class="hint"></div>
+      <div class="dbg-only" style="flex-direction:column;align-items:stretch;gap:8px">
+        <a id="atomChat" href="http://127.0.0.1:8020/chat" target="_blank" style="color:var(--dim);font-size:12px">打开 atom-memory /chat</a>
+        <div id="statusBox" class="hint"></div>
+      </div>
       <button class="primary" id="saveSettings">保存</button>
     </div>
   </div>
@@ -181,9 +214,10 @@ const $ = (s) => document.querySelector(s);
 let sessionId = null;
 let sessionsCache = [];
 let atoms = [];
-let currentKey = null;
 let tab = "chat";
 let warmthSaveTimer = null;
+let showMemoryHints = true;
+let debugOn = localStorage.getItem("velora_debug") === "1";
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -193,6 +227,24 @@ function esc(s) {
 
 function setMeta(html) { $("#meta").innerHTML = html; }
 
+function applyDebugMode() {
+  document.body.classList.toggle("debug-on", debugOn);
+  $("#shell").classList.toggle("debug-on", debugOn && tab === "chat");
+  $("#dbgToggle").checked = debugOn;
+  localStorage.setItem("velora_debug", debugOn ? "1" : "0");
+}
+
+function setMemHint(text) {
+  if (!showMemoryHints || !text) return;
+  $("#memHintText").textContent = text;
+  $("#memHint").classList.add("show");
+}
+
+function clearMemHint() {
+  $("#memHint").classList.remove("show");
+  $("#memHintText").textContent = "";
+}
+
 function addLog(title, payload, open = false) {
   const d = document.createElement("details");
   d.className = "log";
@@ -201,8 +253,7 @@ function addLog(title, payload, open = false) {
   d.innerHTML = `<summary>[${t}] ${esc(title)}</summary><pre>${esc(
     typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)
   )}</pre>`;
-  const box = $("#logs");
-  box.prepend(d);
+  $("#logs").prepend(d);
 }
 
 function addBubble(role, text) {
@@ -222,16 +273,30 @@ function showTab(name) {
   );
   const shell = $("#shell");
   shell.className = name + " show";
+  shell.classList.toggle("debug-on", debugOn && name === "chat");
   shell.querySelectorAll(".pane").forEach((p) => {
-    p.style.display = p.dataset.for === name ? "flex" : "none";
+    const forTab = p.dataset.for === name;
+    if (p.classList.contains("debug-pane")) {
+      p.style.display = forTab && debugOn ? "flex" : "none";
+    } else {
+      p.style.display = forTab ? "flex" : "none";
+    }
   });
-  if (name === "memory") loadAtoms();
+  if (name === "memory") loadMemory();
   if (name === "settings") { loadSettings(); probe(); }
 }
 
 document.querySelectorAll(".tabs button").forEach((btn) => {
   btn.onclick = () => showTab(btn.dataset.tab);
 });
+
+$("#dbgToggle").onchange = () => {
+  debugOn = $("#dbgToggle").checked;
+  applyDebugMode();
+  if (tab === "chat") showTab("chat");
+};
+
+$("#memHintClose").onclick = clearMemHint;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, {
@@ -253,6 +318,7 @@ function renderSessionSelect() {
 
 async function loadSession(id) {
   sessionId = id;
+  clearMemHint();
   const s = sessionsCache.find((x) => x.id === id);
   const w = s?.warmth ?? 35;
   $("#warmth").value = w;
@@ -260,7 +326,7 @@ async function loadSession(id) {
   const turns = await api("/api/sessions/" + sessionId + "/turns");
   $("#msgs").innerHTML = "";
   if (!turns.length) {
-    $("#msgs").innerHTML = '<div class="hint">同一会话接上上下文；长期记忆会召回。右侧 Debug 默认折叠。</div>';
+    $("#msgs").innerHTML = '<div class="hint">同一会话会接上上下文；值得留下的会记入长期记忆。</div>';
   } else {
     turns.forEach((t) => addBubble(t.role, t.content));
   }
@@ -278,6 +344,11 @@ async function refreshSessions(preferId) {
 }
 
 async function init() {
+  applyDebugMode();
+  try {
+    const s = await api("/api/settings");
+    showMemoryHints = !!s.show_memory_hints;
+  } catch {}
   await refreshSessions();
   await probe();
 }
@@ -308,17 +379,13 @@ async function probe() {
     const mem = st.memory || {};
     setMeta(
       `<span class="pill ${llm.ok ? "ok" : "bad"}">llm ${llm.ok ? "ok" : "fail"}</span>` +
-      `<span class="pill ${mem.ok ? "ok" : "bad"}">memory ${mem.ok ? "ok" : "fail"}</span>` +
-      `<span class="pill">${esc(llm.model || "?")}</span>` +
-      `<span class="pill">${esc((sessionId || "").slice(0, 8))}</span>` +
-      `<span class="pill">${esc(mem.space_uid || "")}</span>`
+      `<span class="pill ${mem.ok ? "ok" : "bad"}">memory ${mem.ok ? "ok" : "fail"}</span>`
     );
     const box = $("#statusBox");
     if (box) {
       box.innerHTML =
-        `<div>LLM: ${llm.ok ? "可达" : "不可达"} · model=<code>${esc(llm.model)}</code> · key=${llm.api_key_set ? "已设" : "空"}</div>` +
-        `<div>Memory: ${mem.ok ? "可达" : "不可达"} · <code>${esc(mem.base_url)}</code></div>` +
-        `<div>models 抽样: <code>${esc(JSON.stringify(llm.models_sample))}</code></div>`;
+        `<div>LLM: ${llm.ok ? "可达" : "不可达"} · <code>${esc(llm.model)}</code></div>` +
+        `<div>Memory: ${mem.ok ? "可达" : "不可达"} · <code>${esc(mem.base_url)}</code></div>`;
     }
     if (mem.base_url) {
       $("#atomUi").href = mem.base_url.replace(/\/$/, "") + "/ui?uid=" + encodeURIComponent(mem.space_uid || "");
@@ -326,7 +393,7 @@ async function probe() {
     }
     return st;
   } catch (e) {
-    setMeta(`<span class="pill bad">status fail</span> ${esc(e.message)}`);
+    setMeta(`<span class="pill bad">status fail</span>`);
   }
 }
 
@@ -334,7 +401,9 @@ async function streamChat(text) {
   addBubble("user", text);
   const asst = addBubble("assistant", "");
   $("#err").textContent = "";
-  addLog("user_message", { text }, true);
+  clearMemHint();
+  addLog("user_message", { text }, false);
+  const hints = [];
   const res = await fetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -366,12 +435,19 @@ async function streamChat(text) {
           $("#msgs").scrollTop = $("#msgs").scrollHeight;
         } else if (event !== "token") {
           addLog(event, data, event === "error");
+          if (event === "memory_recall" && data && data.has_block) {
+            hints.push("本轮用到了长期记忆");
+          }
+          if (event === "persisted" && data && data.memory_wrote) {
+            hints.push(data.consolidated ? "本轮已写入记忆并固化" : "本轮已写入记忆");
+          }
         }
         if (event === "error" && data && data.message) $("#err").textContent = data.message;
         event = "message";
       }
     }
   }
+  if (hints.length) setMemHint([...new Set(hints)].join(" · "));
 }
 
 $("#send").onclick = async () => {
@@ -400,20 +476,54 @@ $("#btnNew").onclick = async () => {
   await probe();
 };
 
-$("#btnCon").onclick = async () => {
-  try {
-    const r = await api("/api/memory/consolidate", { method: "POST" });
-    addLog("consolidate", r, true);
-    if (tab === "memory") loadAtoms();
-  } catch (e) {
-    addLog("consolidate_error", String(e), true);
-  }
-};
+async function consolidate() {
+  const r = await api("/api/memory/consolidate", { method: "POST" });
+  addLog("consolidate", r, false);
+  if (tab === "memory") await loadMemory();
+  return r;
+}
 
+$("#btnCon").onclick = () => consolidate().catch((e) => addLog("consolidate_error", String(e), true));
+$("#btnConMem").onclick = () => consolidate().catch((e) => alert(e.message));
 $("#btnProbe").onclick = () => probe();
 $("#btnClearLogs").onclick = () => { $("#logs").innerHTML = ""; };
 
-async function loadAtoms() {
+async function loadMemory() {
+  const summary = await api("/api/memory/summary");
+  const box = $("#summaryBox");
+  if (!summary.total) {
+    box.innerHTML = `<div class="summary-card"><h2>${esc(summary.headline)}</h2></div>`;
+  } else {
+    box.innerHTML = `
+      <div class="summary-card">
+        <h2>${esc(summary.headline)}</h2>
+        ${(summary.sections || []).map((sec) => `
+          <div class="section">
+            <h3>${esc(sec.label)}
+              <button class="danger" data-archive-kind="${esc(sec.kind)}" style="margin-left:8px;padding:2px 8px;font-size:11px">归档此类</button>
+            </h3>
+            ${(sec.items || []).map((it) => `
+              <button class="item" data-key="${esc(it.key)}">
+                <div class="stmt">${esc(it.statement)}</div>
+              </button>`).join("")}
+          </div>`).join("")}
+      </div>`;
+  }
+  box.onclick = (e) => {
+    const arch = e.target.closest("[data-archive-kind]");
+    if (arch) {
+      const kind = arch.dataset.archiveKind;
+      if (!confirm(`确认归档「${kind}」下的记忆？`)) return;
+      api("/api/memory/atoms/archive-kind", {
+        method: "POST",
+        body: JSON.stringify({ kind }),
+      }).then(loadMemory).catch((err) => alert(err.message));
+      return;
+    }
+    const btn = e.target.closest("[data-key]");
+    if (btn) openAtom(btn.dataset.key);
+  };
+
   const data = await api("/api/memory/atoms?page=1&page_size=100");
   atoms = data.results || [];
   const by = {};
@@ -427,7 +537,7 @@ async function loadAtoms() {
           <div class="stmt">${esc(a.statement || "")}</div>
           <div class="kind">${esc(a.key)}</div>
         </button>`).join("")}
-    `).join("") || '<div class="hint">（空）</div>';
+    `).join("") || '<div class="hint">还没有记住什么。可以说「请记住…」。</div>';
   list.onclick = (e) => {
     const btn = e.target.closest("[data-key]");
     if (btn) openAtom(btn.dataset.key);
@@ -435,7 +545,6 @@ async function loadAtoms() {
 }
 
 async function openAtom(key) {
-  currentKey = key;
   [...document.querySelectorAll(".item")].forEach((el) =>
     el.classList.toggle("on", el.dataset.key === key)
   );
@@ -467,17 +576,17 @@ async function openAtom(key) {
   $("#btnArchive").onclick = async () => {
     await api("/api/memory/atoms/" + encodeURIComponent(key) + "/archive", { method: "POST" });
     $("#atom-detail").innerHTML = '<div class="hint">已归档</div>';
-    loadAtoms();
+    loadMemory();
   };
 }
 
-$("#refreshMem").onclick = () => loadAtoms().catch((e) => alert(e.message));
+$("#refreshMem").onclick = () => loadMemory().catch((e) => alert(e.message));
 $("#saveCorr").onclick = async () => {
   const text = $("#correction").value.trim();
   if (!text) return;
   await api("/api/memory/corrections", { method: "POST", body: JSON.stringify({ text }) });
   $("#correction").value = "";
-  loadAtoms();
+  loadMemory();
 };
 
 async function loadSettings() {
@@ -487,6 +596,8 @@ async function loadSettings() {
   $("#atom_url").value = s.atom_memory_base_url;
   $("#space_uid").value = s.memory_space_uid;
   $("#default_warmth").value = s.default_warmth ?? 35;
+  $("#show_memory_hints").checked = !!s.show_memory_hints;
+  showMemoryHints = !!s.show_memory_hints;
   $("#preset_info").value = `${s.preset_id || "—"} · sidecar=${s.start_memory_sidecar ? "on" : "off"}`;
   $("#keyHint").textContent = s.llm_api_key_set ? "（已配置，留空不改）" : "";
 }
@@ -497,14 +608,15 @@ $("#saveSettings").onclick = async () => {
     llm_model: $("#llm_model").value,
     atom_memory_base_url: $("#atom_url").value,
     default_warmth: Number($("#default_warmth").value),
+    show_memory_hints: $("#show_memory_hints").checked,
   };
   const key = $("#llm_api_key").value;
   if (key) body.llm_api_key = key;
-  await api("/api/settings", { method: "PUT", body: JSON.stringify(body) });
+  const s = await api("/api/settings", { method: "PUT", body: JSON.stringify(body) });
+  showMemoryHints = !!s.show_memory_hints;
   $("#llm_api_key").value = "";
   await loadSettings();
   await probe();
-  addLog("settings_saved", body, false);
 };
 
 init().catch((e) => { $("#err").textContent = String(e); });

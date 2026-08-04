@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     # conversation
     history_max_messages: int = 40
     tts_enabled: bool = False
+    # Show per-turn memory recall/write hints in Desk
+    show_memory_hints: bool = True
     # 0 = more assistant, 100 = more companion (new sessions)
     default_warmth: int = 35
 

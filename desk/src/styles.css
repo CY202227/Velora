@@ -336,8 +336,57 @@ main {
   min-height: 0;
 }
 
+.split.single {
+  grid-template-columns: 1fr;
+}
+
 .split.memory {
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 1.2fr 1fr;
+}
+
+.mem-hint {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border-radius: 8px;
+  background: rgba(61, 155, 143, 0.15);
+  border: 1px solid rgba(61, 155, 143, 0.4);
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+
+.chk-inline {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.all-atoms {
+  margin-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 0.75rem;
+}
+
+.all-atoms summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.summary-sections {
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.summary-section {
+  margin-bottom: 0.75rem;
 }
 
 .split > .panel {

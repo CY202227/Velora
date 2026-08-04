@@ -11,6 +11,7 @@ _KEYS = (
     "llm_model",
     "llm_api_key",
     "tts_enabled",
+    "show_memory_hints",
     "atom_memory_base_url",
     "default_warmth",
 )
@@ -28,6 +29,13 @@ async def load_settings(
             continue
         if key == "tts_enabled":
             settings.tts_enabled = raw.strip().lower() in ("1", "true", "yes", "on")
+        elif key == "show_memory_hints":
+            settings.show_memory_hints = raw.strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
         elif key == "llm_base_url":
             settings.llm_base_url = raw.rstrip("/")
             provider.base_url = settings.llm_base_url
@@ -50,6 +58,10 @@ async def save_settings(store: ConversationStore, settings: Settings) -> None:
     await store.set_setting("llm_api_key", settings.llm_api_key)
     await store.set_setting(
         "tts_enabled", "true" if settings.tts_enabled else "false"
+    )
+    await store.set_setting(
+        "show_memory_hints",
+        "true" if settings.show_memory_hints else "false",
     )
     await store.set_setting("atom_memory_base_url", settings.atom_memory_base_url)
     await store.set_setting("default_warmth", str(settings.default_warmth))

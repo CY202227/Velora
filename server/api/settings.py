@@ -16,6 +16,7 @@ class SettingsOut(BaseModel):
     atom_memory_base_url: str
     memory_space_uid: str
     tts_enabled: bool
+    show_memory_hints: bool
     default_warmth: int
     preset_id: str
     start_memory_sidecar: bool
@@ -28,6 +29,7 @@ class SettingsUpdate(BaseModel):
     llm_model: str | None = None
     llm_api_key: str | None = None
     tts_enabled: bool | None = None
+    show_memory_hints: bool | None = None
     atom_memory_base_url: str | None = None
     default_warmth: int | None = None
 
@@ -42,6 +44,7 @@ async def get_settings(request: Request) -> SettingsOut:
         atom_memory_base_url=s.atom_memory_base_url,
         memory_space_uid=s.memory_space_uid,
         tts_enabled=s.tts_enabled,
+        show_memory_hints=s.show_memory_hints,
         default_warmth=s.default_warmth,
         preset_id=s.preset_id,
         start_memory_sidecar=s.start_memory_sidecar,
@@ -64,6 +67,8 @@ async def update_settings(body: SettingsUpdate, request: Request) -> SettingsOut
         state.provider.api_key = s.llm_api_key
     if body.tts_enabled is not None:
         s.tts_enabled = body.tts_enabled
+    if body.show_memory_hints is not None:
+        s.show_memory_hints = body.show_memory_hints
     if body.atom_memory_base_url is not None:
         s.atom_memory_base_url = body.atom_memory_base_url.rstrip("/")
         state.memory.base_url = s.atom_memory_base_url
