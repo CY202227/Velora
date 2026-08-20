@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import unquote
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from server.core.computer.workspace import WorkspaceError, resolve_in_workspace
 from server.core.persona.default import DEFAULT_PERSONA
 from server.core.persona.style import clamp_warmth
 
@@ -37,11 +40,20 @@ class SessionOut(BaseModel):
     updated_at: str
 
 
+class AttachmentOut(BaseModel):
+    path: str
+    name: str
+    bytes: int
+    kind: str = "file"
+
+
 class TurnOut(BaseModel):
     id: str
     role: str
     content: str
     created_at: str
+    source: str = "chat"
+    attachments: list[AttachmentOut] = Field(default_factory=list)
 
 
 def _session_out(row) -> SessionOut:
@@ -59,6 +71,31 @@ def _session_out(row) -> SessionOut:
         warmth=warmth,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+def _turn_out(t) -> TurnOut:
+    atts: list[AttachmentOut] = []
+    for raw in getattr(t, "attachments", None) or []:
+        if not isinstance(raw, dict):
+            continue
+        path = str(raw.get("path") or "").strip()
+        name = str(raw.get("name") or "").strip() or path
+        if not path:
+            continue
+        try:
+            size = int(raw.get("bytes") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        kind = str(raw.get("kind") or "file")
+        atts.append(AttachmentOut(path=path, name=name, bytes=size, kind=kind))
+    return TurnOut(
+        id=t.id,
+        role=t.role,
+        content=t.content,
+        created_at=t.created_at,
+        source=getattr(t, "source", None) or "chat",
+        attachments=atts,
     )
 
 
@@ -130,7 +167,36 @@ async def list_turns(session_id: str, request: Request) -> list[TurnOut]:
     turns = await state.store.list_turns(
         session_id, limit=state.settings.history_max_messages
     )
-    return [
-        TurnOut(id=t.id, role=t.role, content=t.content, created_at=t.created_at)
-        for t in turns
-    ]
+    return [_turn_out(t) for t in turns]
+
+
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+
+@router.get("/{session_id}/workspace/{file_path:path}")
+async def get_workspace_file(
+    session_id: str, file_path: str, request: Request
+) -> FileResponse:
+    state = request.app.state.velora
+    if await state.store.get_session(session_id) is None:
+        raise HTTPException(404, "session not found")
+    rel = unquote(file_path or "").strip().lstrip("/")
+    if not rel:
+        raise HTTPException(400, "path required")
+    try:
+        target = resolve_in_workspace(
+            state.settings.workspaces_dir,
+            session_id,
+            rel,
+            allow_abs=False,
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not target.is_file():
+        raise HTTPException(404, "file not found")
+    inline = target.suffix.lower() in _IMAGE_EXTS
+    return FileResponse(
+        path=target,
+        filename=target.name,
+        content_disposition_type="inline" if inline else "attachment",
+    )

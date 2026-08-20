@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from server.app_state import sync_optional_tools
 from server.core.persona.default import DEFAULT_PERSONA
+from server.core.reminders.quiet import parse_hhmm, resolve_timezone
 from server.core.settings_store import save_settings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -18,10 +20,21 @@ class SettingsOut(BaseModel):
     tts_enabled: bool
     show_memory_hints: bool
     default_warmth: int
+    user_timezone: str
+    quiet_hours_enabled: bool
+    quiet_hours_start: str
+    quiet_hours_end: str
+    reminders_enabled: bool
     preset_id: str
     start_memory_sidecar: bool
     persona_name: str
     persona_id: str
+    persona_opener: str | None = None
+    web_search_enabled: bool = True
+    tavily_api_key_set: bool = False
+    computer_enabled: bool = True
+    skills_dir: str = ""
+    mcp_enabled: bool = True
 
 
 class SettingsUpdate(BaseModel):
@@ -32,6 +45,13 @@ class SettingsUpdate(BaseModel):
     show_memory_hints: bool | None = None
     atom_memory_base_url: str | None = None
     default_warmth: int | None = None
+    user_timezone: str | None = None
+    quiet_hours_enabled: bool | None = None
+    quiet_hours_start: str | None = None
+    quiet_hours_end: str | None = None
+    web_search_enabled: bool | None = None
+    tavily_api_key: str | None = None
+    computer_enabled: bool | None = None
 
 
 @router.get("", response_model=SettingsOut)
@@ -46,10 +66,21 @@ async def get_settings(request: Request) -> SettingsOut:
         tts_enabled=s.tts_enabled,
         show_memory_hints=s.show_memory_hints,
         default_warmth=s.default_warmth,
+        user_timezone=s.user_timezone,
+        quiet_hours_enabled=s.quiet_hours_enabled,
+        quiet_hours_start=s.quiet_hours_start,
+        quiet_hours_end=s.quiet_hours_end,
+        reminders_enabled=s.reminders_enabled,
         preset_id=s.preset_id,
         start_memory_sidecar=s.start_memory_sidecar,
         persona_name=DEFAULT_PERSONA.name,
         persona_id=DEFAULT_PERSONA.id,
+        persona_opener=DEFAULT_PERSONA.opener,
+        web_search_enabled=s.web_search_enabled,
+        tavily_api_key_set=bool(s.tavily_api_key),
+        computer_enabled=s.computer_enabled,
+        skills_dir=s.skills_dir,
+        mcp_enabled=s.mcp_enabled,
     )
 
 
@@ -77,6 +108,31 @@ async def update_settings(body: SettingsUpdate, request: Request) -> SettingsOut
         from server.core.persona.style import clamp_warmth
 
         s.default_warmth = clamp_warmth(body.default_warmth)
+    if body.user_timezone is not None:
+        tz = body.user_timezone.strip()
+        resolve_timezone(tz)
+        s.user_timezone = tz or s.user_timezone
+    if body.quiet_hours_enabled is not None:
+        s.quiet_hours_enabled = body.quiet_hours_enabled
+    if body.quiet_hours_start is not None:
+        try:
+            parse_hhmm(body.quiet_hours_start)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        s.quiet_hours_start = body.quiet_hours_start.strip()
+    if body.quiet_hours_end is not None:
+        try:
+            parse_hhmm(body.quiet_hours_end)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        s.quiet_hours_end = body.quiet_hours_end.strip()
+    if body.web_search_enabled is not None:
+        s.web_search_enabled = body.web_search_enabled
+    if body.tavily_api_key is not None:
+        s.tavily_api_key = body.tavily_api_key
+    if body.computer_enabled is not None:
+        s.computer_enabled = body.computer_enabled
 
     await save_settings(state.store, s)
+    sync_optional_tools(state.tools, s)
     return await get_settings(request)

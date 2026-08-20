@@ -1,7 +1,7 @@
 # Velora
 
 Personal LLM chat desk: cloud (OpenAI-compatible) and local models, optional external TTS, lasting memory via a separate HTTP memory service.  
-Not an IM bot framework.
+Builtin function calling (reminders / time / memory summary) plus optional MCP clients via `velora_data/mcp_server.json`. Not an IM bot framework.
 
 ## Layout
 
@@ -34,7 +34,9 @@ copy .env.example .env
 
 Open http://127.0.0.1:8030/ for the built-in desk UI.
 
-If sidecar is off, start memory yourself (or keep a checkout under `refs/atom_memory`):
+If sidecar is off, start memory yourself (or keep a checkout under `refs/atom_memory`).
+Sidecar prefers `refs/atom_memory` on `PYTHONPATH` when that checkout exists, so local
+memory updates (layered recall / L2 synthesize / L3 persona) apply without a pip reinstall.
 
 ```bash
 cd refs/atom_memory

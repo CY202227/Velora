@@ -14,7 +14,18 @@ _KEYS = (
     "show_memory_hints",
     "atom_memory_base_url",
     "default_warmth",
+    "user_timezone",
+    "quiet_hours_enabled",
+    "quiet_hours_start",
+    "quiet_hours_end",
+    "web_search_enabled",
+    "tavily_api_key",
+    "computer_enabled",
 )
+
+
+def _as_bool(raw: str) -> bool:
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 async def load_settings(
@@ -28,14 +39,15 @@ async def load_settings(
         if raw is None:
             continue
         if key == "tts_enabled":
-            settings.tts_enabled = raw.strip().lower() in ("1", "true", "yes", "on")
+            settings.tts_enabled = _as_bool(raw)
         elif key == "show_memory_hints":
-            settings.show_memory_hints = raw.strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            )
+            settings.show_memory_hints = _as_bool(raw)
+        elif key == "quiet_hours_enabled":
+            settings.quiet_hours_enabled = _as_bool(raw)
+        elif key == "web_search_enabled":
+            settings.web_search_enabled = _as_bool(raw)
+        elif key == "computer_enabled":
+            settings.computer_enabled = _as_bool(raw)
         elif key == "llm_base_url":
             settings.llm_base_url = raw.rstrip("/")
             provider.base_url = settings.llm_base_url
@@ -50,6 +62,14 @@ async def load_settings(
             from server.core.persona.style import clamp_warmth
 
             settings.default_warmth = clamp_warmth(raw)
+        elif key == "user_timezone":
+            settings.user_timezone = raw.strip() or settings.user_timezone
+        elif key == "quiet_hours_start":
+            settings.quiet_hours_start = raw.strip() or settings.quiet_hours_start
+        elif key == "quiet_hours_end":
+            settings.quiet_hours_end = raw.strip() or settings.quiet_hours_end
+        elif key == "tavily_api_key":
+            settings.tavily_api_key = raw
 
 
 async def save_settings(store: ConversationStore, settings: Settings) -> None:
@@ -65,3 +85,19 @@ async def save_settings(store: ConversationStore, settings: Settings) -> None:
     )
     await store.set_setting("atom_memory_base_url", settings.atom_memory_base_url)
     await store.set_setting("default_warmth", str(settings.default_warmth))
+    await store.set_setting("user_timezone", settings.user_timezone)
+    await store.set_setting(
+        "quiet_hours_enabled",
+        "true" if settings.quiet_hours_enabled else "false",
+    )
+    await store.set_setting("quiet_hours_start", settings.quiet_hours_start)
+    await store.set_setting("quiet_hours_end", settings.quiet_hours_end)
+    await store.set_setting(
+        "web_search_enabled",
+        "true" if settings.web_search_enabled else "false",
+    )
+    await store.set_setting("tavily_api_key", settings.tavily_api_key)
+    await store.set_setting(
+        "computer_enabled",
+        "true" if settings.computer_enabled else "false",
+    )

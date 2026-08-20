@@ -146,7 +146,10 @@ async def test_compose_includes_memory_and_persona() -> None:
     assert "<recalled_memory>" in ctx.messages[0]["content"]
     assert "熟人助理" in ctx.messages[0]["content"] or "风格" in ctx.messages[0]["content"]
     assert ctx.messages[-1] == {"role": "user", "content": "hi"}
-    assert len(ctx.messages) == 4
+    # system + begin_dialogs (2) + history (2) + current user
+    assert len(ctx.messages) == 6
+    assert ctx.messages[1]["role"] == "user"
+    assert ctx.messages[2]["role"] == "assistant"
 
 
 @pytest.mark.asyncio

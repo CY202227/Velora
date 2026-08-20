@@ -117,6 +117,9 @@ def test_sidecar_spawns_when_needed() -> None:
                     env = popen.call_args.kwargs["env"]
                     assert env["ATOMMEM_LLM_MODEL"] == "m"
                     assert env["ATOMMEM_LLM_BASE_URL"] == "http://example/v1"
+                    refs = sidecar_mod.atom_memory_root()
+                    if refs is not None:
+                        assert str(refs) in env.get("PYTHONPATH", "")
 
 
 def test_load_preset_local_default() -> None:
@@ -124,3 +127,11 @@ def test_load_preset_local_default() -> None:
     assert preset.get("id") == "local-default"
     assert preset["sidecar"]["port"] == 8020
     assert preset["sidecar"]["sync_llm_to_memory"] is True
+
+
+def test_atom_memory_root_prefers_refs() -> None:
+    root = sidecar_mod.atom_memory_root()
+    if root is None:
+        pytest.skip("refs/atom_memory not checked out")
+    assert root.name == "atom_memory"
+    assert (root / "atom_memory").is_dir()

@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
+
+from server.core.provider.base import ChatResult, ToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -31,18 +34,71 @@ class OpenAICompatProvider:
 
     async def complete(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
         model: str,
     ) -> str:
-        chunks: list[str] = []
-        async for piece in self.stream(messages, model=model):
-            chunks.append(piece)
-        return "".join(chunks)
+        result = await self.chat(messages, model=model)
+        return (result.content or "").strip()
+
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> ChatResult:
+        """Non-streaming completion; optionally with tools / tool_calls."""
+        url = f"{self.base_url}/chat/completions"
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice if tool_choice is not None else "auto"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(url, headers=self._headers(), json=payload)
+            if resp.status_code >= 400:
+                raise httpx.HTTPStatusError(
+                    f"{resp.status_code} for {url}: {resp.text}",
+                    request=resp.request,
+                    response=resp,
+                )
+            obj = resp.json()
+        choices = obj.get("choices") or []
+        if not choices:
+            return ChatResult()
+        message = choices[0].get("message") or {}
+        content = message.get("content")
+        if content is not None and not isinstance(content, str):
+            content = str(content)
+        raw_calls = message.get("tool_calls") or []
+        tool_calls: list[ToolCall] = []
+        for tc in raw_calls:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            name = fn.get("name") or ""
+            args = fn.get("arguments")
+            if args is None:
+                args = "{}"
+            elif not isinstance(args, str):
+                args = json.dumps(args, ensure_ascii=False)
+            tool_calls.append(
+                ToolCall(
+                    id=str(tc.get("id") or f"call_{len(tool_calls)}"),
+                    name=str(name),
+                    arguments=args,
+                )
+            )
+        return ChatResult(content=content, tool_calls=tool_calls)
 
     async def stream(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
         model: str,
     ) -> AsyncIterator[str]:

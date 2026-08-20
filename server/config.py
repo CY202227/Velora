@@ -34,7 +34,11 @@ class Settings(BaseSettings):
     memory_space_uid: str = "velora-default"
     memory_budget_chars: int = 400
     memory_max_atoms: int = 5
+    # layered = L3 sticky + L2 + L1 (atom-memory default); flat = old retrieve
+    memory_recall_policy: str = "layered"
     consolidate_every_n_turns: int = 3
+    # After N scheduled L1 consolidates, also run L2 synthesize + L3 persona
+    memory_layer_every_n_consolidates: int = 5
 
     # conversation
     history_max_messages: int = 40
@@ -47,6 +51,35 @@ class Settings(BaseSettings):
     # local-default preset / optional atom-memory sidecar
     preset_id: str = "local-default"
     start_memory_sidecar: bool = False
+
+    # reminders (explicit; quiet hours in user timezone)
+    reminders_enabled: bool = True
+    reminder_poll_seconds: int = 20
+    user_timezone: str = "Asia/Shanghai"
+    quiet_hours_enabled: bool = True
+    quiet_hours_start: str = "22:00"
+    quiet_hours_end: str = "08:00"
+
+    # function calling / builtin tools
+    max_tool_rounds: int = 4
+
+    # MCP clients (AstrBot-compatible mcp_server.json)
+    mcp_enabled: bool = True
+    mcp_config_path: str = f"{(_DATA / 'mcp_server.json').as_posix()}"
+
+    # local computer use (session workspace)
+    computer_enabled: bool = True
+    computer_shell: str = "powershell"  # powershell | cmd | bash
+    computer_timeout_seconds: int = 60
+    computer_allow_abs_paths: bool = False
+    workspaces_dir: str = f"{(_DATA / 'workspaces').as_posix()}"
+
+    # skills
+    skills_dir: str = f"{(_DATA / 'skills').as_posix()}"
+
+    # web search (Tavily)
+    web_search_enabled: bool = True
+    tavily_api_key: str = ""
 
     cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
 

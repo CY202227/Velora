@@ -25,11 +25,35 @@ export type Session = {
   updated_at: string;
 };
 
+export type TurnAttachment = {
+  path: string;
+  name: string;
+  bytes: number;
+  kind: string;
+};
+
 export type Turn = {
   id: string;
   role: string;
   content: string;
   created_at: string;
+  source?: string;
+  attachments?: TurnAttachment[];
+};
+
+export type Reminder = {
+  id: string;
+  session_id: string;
+  note: string;
+  due_at: string;
+  status: string;
+  deliver_text: string | null;
+  created_at: string;
+  delivered_at: string | null;
+  error: string | null;
+  schedule_kind?: string;
+  cron_expr?: string | null;
+  last_run_at?: string | null;
 };
 
 export type Settings = {
@@ -41,10 +65,40 @@ export type Settings = {
   tts_enabled: boolean;
   show_memory_hints: boolean;
   default_warmth: number;
+  user_timezone: string;
+  quiet_hours_enabled: boolean;
+  quiet_hours_start: string;
+  quiet_hours_end: string;
+  reminders_enabled: boolean;
   preset_id: string;
   start_memory_sidecar: boolean;
   persona_name: string;
   persona_id: string;
+  persona_opener?: string | null;
+  web_search_enabled?: boolean;
+  tavily_api_key_set?: boolean;
+  computer_enabled?: boolean;
+  skills_dir?: string;
+  mcp_enabled?: boolean;
+};
+
+export type McpServerEntry = {
+  active?: boolean;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  url?: string;
+  transport?: string;
+  type?: string;
+  headers?: Record<string, string>;
+  [key: string]: unknown;
+};
+
+export type SkillsList = {
+  count: number;
+  skills_dir: string;
+  skills: Array<{ name: string; description: string; path: string }>;
 };
 
 export type AtomRow = {
@@ -97,6 +151,68 @@ export type DebugStatus = {
   sessions_recent: Array<{ id: string; updated_at: string; model: string }>;
 };
 
+export type McpStatus = {
+  enabled: boolean;
+  config_path: string;
+  tool_count: number;
+  servers: Array<{
+    name: string;
+    ok: boolean;
+    tool_count: number;
+    error?: string | null;
+    transport?: string;
+  }>;
+};
+
+/** Interpret datetime-local wall time in an IANA zone → UTC ISO. */
+export function zonedLocalToUtcIso(dateTimeLocal: string, timeZone: string): string {
+  const [datePart, timePart] = dateTimeLocal.split("T");
+  if (!datePart || !timePart) throw new Error("invalid datetime-local");
+  const [y, mo, d] = datePart.split("-").map(Number);
+  const [hh, mm] = timePart.split(":").map(Number);
+  let guess = Date.UTC(y, mo - 1, d, hh, mm, 0);
+  for (let i = 0; i < 4; i++) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(new Date(guess));
+    const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+    const asUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"));
+    const target = Date.UTC(y, mo - 1, d, hh, mm);
+    guess += target - asUtc;
+  }
+  return new Date(guess).toISOString();
+}
+
+export function formatInTz(iso: string, timeZone: string): string {
+  try {
+    return new Date(iso).toLocaleString("zh-CN", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  } catch {
+    return iso;
+  }
+}
+
+export function browserTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
 export const api = {
   createSession: (body?: { warmth?: number }) =>
     json<Session>("/api/sessions", { method: "POST", body: JSON.stringify(body || {}) }),
@@ -114,8 +230,33 @@ export const api = {
       show_memory_hints: boolean;
       atom_memory_base_url: string;
       default_warmth: number;
+      user_timezone: string;
+      quiet_hours_enabled: boolean;
+      quiet_hours_start: string;
+      quiet_hours_end: string;
+      web_search_enabled: boolean;
+      tavily_api_key: string;
+      computer_enabled: boolean;
     }>,
   ) => json<Settings>("/api/settings", { method: "PUT", body: JSON.stringify(body) }),
+  listReminders: (sessionId: string, status?: string) => {
+    const q = new URLSearchParams({ session_id: sessionId });
+    if (status) q.set("status", status);
+    return json<Reminder[]>(`/api/reminders?${q}`);
+  },
+  createReminder: (body: {
+    session_id: string;
+    note: string;
+    due_at?: string;
+    cron_expr?: string;
+  }) => json<Reminder>("/api/reminders", { method: "POST", body: JSON.stringify(body) }),
+  cancelReminder: (id: string) =>
+    json<Reminder>(`/api/reminders/${id}/cancel`, { method: "POST" }),
+  workspaceFileUrl: (sessionId: string, path: string) =>
+    `/api/sessions/${encodeURIComponent(sessionId)}/workspace/${path
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/")}`,
   memorySummary: () => json<MemorySummary>("/api/memory/summary"),
   listAtoms: () =>
     json<{ count: number; results: AtomRow[] }>("/api/memory/atoms?page=1&page_size=100"),
@@ -131,6 +272,23 @@ export const api = {
     json("/api/memory/corrections", { method: "POST", body: JSON.stringify({ text }) }),
   consolidate: () => json("/api/memory/consolidate", { method: "POST" }),
   debugStatus: () => json<DebugStatus>("/api/debug/status"),
+  mcpStatus: () => json<McpStatus>("/api/mcp/status"),
+  mcpServers: () =>
+    json<{ config_path: string; mcpServers: Record<string, McpServerEntry> }>(
+      "/api/mcp/servers",
+    ),
+  putMcpServers: (mcpServers: Record<string, McpServerEntry>) =>
+    json<McpStatus>("/api/mcp/servers", {
+      method: "PUT",
+      body: JSON.stringify({ mcpServers }),
+    }),
+  reloadMcp: () => json<McpStatus>("/api/mcp/reload", { method: "POST" }),
+  testMcpServer: (name: string, config: McpServerEntry) =>
+    json<{ ok: boolean; name: string; tool_count: number; error?: string; tools?: unknown[] }>(
+      "/api/mcp/servers/test",
+      { method: "POST", body: JSON.stringify({ name, config }) },
+    ),
+  listSkills: () => json<SkillsList>("/api/skills"),
 };
 
 /** POST + SSE via fetch stream (EventSource cannot POST). */

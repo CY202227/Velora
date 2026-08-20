@@ -47,8 +47,14 @@
     body.debug-on .dbg-only { display: inline-flex; align-items: center; gap: 6px; }
     #shell { min-height: 0; display: none; }
     #shell.show { display: grid; }
-    #shell.chat { grid-template-columns: 1fr; }
+    #shell.chat { grid-template-columns: 1.35fr 0.75fr; }
     #shell.chat.debug-on { grid-template-columns: 1.2fr 1fr; }
+    #shell.chat.debug-on .pane.rem-pane { display: none !important; }
+    .bubble.reminder { border: 1px solid #2f5a4a; background: rgba(94,200,165,.1); }
+    .tag-rem { font: 600 10px var(--mono); color: var(--accent); margin-right: 6px; }
+    #rem-list { list-style: none; margin: 0; padding: 8px 12px; overflow: auto; flex: 1; }
+    #rem-list li { display: flex; justify-content: space-between; gap: 8px; padding: 8px; margin: 4px 0; background: #161922; border-radius: 8px; border: 1px solid var(--line); }
+    #rem-list .meta { font: 11px var(--mono); color: var(--dim); margin-top: 4px; }
     #shell.memory { grid-template-columns: 1.2fr 1fr; }
     #shell.settings { grid-template-columns: 1fr; }
     @media (max-width: 900px) {
@@ -165,6 +171,16 @@
       <button class="primary" id="send">发送</button>
     </div>
   </div>
+  <div class="pane rem-pane" data-for="chat">
+    <div class="pane-title">提醒</div>
+    <div class="form" style="padding:10px 12px;max-width:none">
+      <label>事项<input id="remNote" placeholder="明天下午开会" /></label>
+      <label>时间（按用户时区）<input id="remDue" type="datetime-local" /></label>
+      <button class="primary" id="btnCreateRem">创建提醒</button>
+      <div class="hint" id="remTzHint"></div>
+    </div>
+    <ul id="rem-list"><li class="hint">暂无待办提醒</li></ul>
+  </div>
   <div class="pane debug-pane" data-for="chat">
     <div class="pane-title">Debug <button id="btnClearLogs" style="float:right;padding:2px 8px;font-size:11px">清空</button></div>
     <div id="logs"></div>
@@ -199,12 +215,28 @@
       <label>memory space（只读）<input id="space_uid" readonly /></label>
       <label>新会话默认 warmth<input id="default_warmth" type="number" min="0" max="100" /></label>
       <label class="chk"><input type="checkbox" id="show_memory_hints" /> 对话中显示记忆提示</label>
+      <label>时区（IANA）<input id="user_timezone" /><span class="hint" id="tzSuggest"></span></label>
+      <label class="chk"><input type="checkbox" id="quiet_hours_enabled" /> 启用静默时段</label>
+      <label>静默开始 HH:MM<input id="quiet_hours_start" placeholder="22:00" /></label>
+      <label>静默结束 HH:MM<input id="quiet_hours_end" placeholder="08:00" /></label>
       <label>预设 / sidecar（只读）<input id="preset_info" readonly /></label>
+      <label>Skills（只读）<input id="skills_info" readonly /></label>
+      <label class="chk"><input type="checkbox" id="computer_enabled" /> 本机工具（Shell/Python/文件）</label>
+      <label class="chk"><input type="checkbox" id="web_search_enabled" /> 网页搜索（Tavily）</label>
+      <label>Tavily API Key <span id="tavilyHint"></span><input id="tavily_api_key" type="password" placeholder="留空不改" autocomplete="off" /></label>
+      <label>MCP 状态（只读）<input id="mcp_info" readonly /></label>
+      <label>MCP 配置 JSON（mcpServers）
+        <textarea id="mcp_json" style="min-height:140px;width:100%;font:12px var(--mono)"></textarea>
+      </label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="primary" id="saveSettings" type="button">保存设置</button>
+        <button id="saveMcp" type="button">保存 MCP 并重载</button>
+        <button id="reloadMcp" type="button">仅重载 MCP</button>
+      </div>
       <div class="dbg-only" style="flex-direction:column;align-items:stretch;gap:8px">
         <a id="atomChat" href="http://127.0.0.1:8020/chat" target="_blank" style="color:var(--dim);font-size:12px">打开 atom-memory /chat</a>
         <div id="statusBox" class="hint"></div>
       </div>
-      <button class="primary" id="saveSettings">保存</button>
     </div>
   </div>
 </section>
@@ -217,7 +249,42 @@ let atoms = [];
 let tab = "chat";
 let warmthSaveTimer = null;
 let showMemoryHints = true;
+let userTimezone = "Asia/Shanghai";
+let personaOpener = "";
+let lastTurnCount = 0;
+let turnsPollTimer = null;
 let debugOn = localStorage.getItem("velora_debug") === "1";
+
+function browserTimezone() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; }
+  catch { return "UTC"; }
+}
+
+function zonedLocalToUtcIso(dateTimeLocal, timeZone) {
+  const [datePart, timePart] = dateTimeLocal.split("T");
+  const [y, mo, d] = datePart.split("-").map(Number);
+  const [hh, mm] = timePart.split(":").map(Number);
+  let guess = Date.UTC(y, mo - 1, d, hh, mm, 0);
+  for (let i = 0; i < 4; i++) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }).formatToParts(new Date(guess));
+    const get = (t) => Number(parts.find((p) => p.type === t)?.value);
+    const asUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"));
+    guess += Date.UTC(y, mo - 1, d, hh, mm) - asUtc;
+  }
+  return new Date(guess).toISOString();
+}
+
+function formatInTz(iso, timeZone) {
+  try {
+    return new Date(iso).toLocaleString("zh-CN", {
+      timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+  } catch { return iso; }
+}
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -256,14 +323,53 @@ function addLog(title, payload, open = false) {
   $("#logs").prepend(d);
 }
 
-function addBubble(role, text) {
+function addBubble(role, text, source) {
   const d = document.createElement("div");
-  d.className = "bubble " + (role === "user" ? "user" : "ai");
-  d.innerHTML = `<div class="who">${role}</div><div class="body"></div>`;
+  const isRem = source === "reminder" || String(text || "").startsWith("【提醒】");
+  d.className = "bubble " + (role === "user" ? "user" : "ai") + (isRem ? " reminder" : "");
+  const who = isRem ? '<span class="tag-rem">提醒</span>' + esc(role) : esc(role);
+  d.innerHTML = `<div class="who">${who}</div><div class="body"></div>`;
   d.querySelector(".body").textContent = text;
   $("#msgs").appendChild(d);
   $("#msgs").scrollTop = $("#msgs").scrollHeight;
   return d.querySelector(".body");
+}
+
+async function loadReminders() {
+  if (!sessionId) return;
+  const list = await api("/api/reminders?session_id=" + encodeURIComponent(sessionId) + "&status=pending");
+  const ul = $("#rem-list");
+  $("#remTzHint").textContent = "时区：" + userTimezone + "（静默时段内会延后投递）";
+  if (!list.length) {
+    ul.innerHTML = '<li class="hint">暂无待办提醒</li>';
+    return;
+  }
+  ul.innerHTML = list.map((r) => `
+    <li>
+      <div><strong>${esc(r.note)}</strong><div class="meta">${esc(formatInTz(r.due_at, userTimezone))}</div></div>
+      <button data-cancel="${esc(r.id)}">取消</button>
+    </li>`).join("");
+  ul.onclick = (e) => {
+    const btn = e.target.closest("[data-cancel]");
+    if (!btn) return;
+    api("/api/reminders/" + btn.dataset.cancel + "/cancel", { method: "POST" })
+      .then(loadReminders).catch((err) => { $("#err").textContent = String(err); });
+  };
+}
+
+function startTurnsPoll() {
+  if (turnsPollTimer) clearInterval(turnsPollTimer);
+  turnsPollTimer = setInterval(async () => {
+    if (tab !== "chat" || !sessionId) return;
+    try {
+      const turns = await api("/api/sessions/" + sessionId + "/turns");
+      if (turns.length <= lastTurnCount) return;
+      lastTurnCount = turns.length;
+      $("#msgs").innerHTML = "";
+      turns.forEach((t) => addBubble(t.role, t.content, t.source));
+      await loadReminders();
+    } catch {}
+  }, 15000);
 }
 
 function showTab(name) {
@@ -284,6 +390,7 @@ function showTab(name) {
   });
   if (name === "memory") loadMemory();
   if (name === "settings") { loadSettings(); probe(); }
+  if (name === "chat") { loadReminders().catch(() => {}); startTurnsPoll(); }
 }
 
 document.querySelectorAll(".tabs button").forEach((btn) => {
@@ -324,13 +431,20 @@ async function loadSession(id) {
   $("#warmth").value = w;
   $("#warmthVal").textContent = w;
   const turns = await api("/api/sessions/" + sessionId + "/turns");
+  lastTurnCount = turns.length;
   $("#msgs").innerHTML = "";
   if (!turns.length) {
-    $("#msgs").innerHTML = '<div class="hint">同一会话会接上上下文；值得留下的会记入长期记忆。</div>';
+    if (personaOpener) {
+      addBubble("assistant", personaOpener, "opener");
+    } else {
+      $("#msgs").innerHTML = '<div class="hint">同一会话会接上上下文；值得留下的会记入长期记忆。</div>';
+    }
   } else {
-    turns.forEach((t) => addBubble(t.role, t.content));
+    turns.forEach((t) => addBubble(t.role, t.content, t.source));
   }
   renderSessionSelect();
+  await loadReminders();
+  startTurnsPoll();
 }
 
 async function refreshSessions(preferId) {
@@ -348,10 +462,34 @@ async function init() {
   try {
     const s = await api("/api/settings");
     showMemoryHints = !!s.show_memory_hints;
+    userTimezone = s.user_timezone || browserTimezone();
+    personaOpener = s.persona_opener || "";
   } catch {}
   await refreshSessions();
   await probe();
+  startTurnsPoll();
 }
+
+$("#btnCreateRem").onclick = async () => {
+  const note = $("#remNote").value.trim();
+  const local = $("#remDue").value;
+  if (!note || !local || !sessionId) return;
+  try {
+    await api("/api/reminders", {
+      method: "POST",
+      body: JSON.stringify({
+        session_id: sessionId,
+        note,
+        due_at: zonedLocalToUtcIso(local, userTimezone),
+      }),
+    });
+    $("#remNote").value = "";
+    $("#remDue").value = "";
+    await loadReminders();
+  } catch (e) {
+    $("#err").textContent = String(e);
+  }
+};
 
 $("#sessionSelect").onchange = () => loadSession($("#sessionSelect").value).catch((e) => {
   $("#err").textContent = String(e);
@@ -441,6 +579,13 @@ async function streamChat(text) {
           if (event === "persisted" && data && data.memory_wrote) {
             hints.push(data.consolidated ? "本轮已写入记忆并固化" : "本轮已写入记忆");
           }
+          if (event === "reminder_created") loadReminders().catch(() => {});
+          if (event === "tool_call" && data && data.name) {
+            hints.push("调用工具 " + data.name);
+          }
+          if (event === "tool_result" && data && (data.name === "create_reminder" || data.name === "list_reminders")) {
+            loadReminders().catch(() => {});
+          }
         }
         if (event === "error" && data && data.message) $("#err").textContent = data.message;
         event = "message";
@@ -448,6 +593,10 @@ async function streamChat(text) {
     }
   }
   if (hints.length) setMemHint([...new Set(hints)].join(" · "));
+  try {
+    const turns = await api("/api/sessions/" + sessionId + "/turns");
+    lastTurnCount = turns.length;
+  } catch {}
 }
 
 $("#send").onclick = async () => {
@@ -598,8 +747,37 @@ async function loadSettings() {
   $("#default_warmth").value = s.default_warmth ?? 35;
   $("#show_memory_hints").checked = !!s.show_memory_hints;
   showMemoryHints = !!s.show_memory_hints;
-  $("#preset_info").value = `${s.preset_id || "—"} · sidecar=${s.start_memory_sidecar ? "on" : "off"}`;
+  userTimezone = s.user_timezone || browserTimezone();
+  $("#user_timezone").value = userTimezone;
+  $("#quiet_hours_enabled").checked = !!s.quiet_hours_enabled;
+  $("#quiet_hours_start").value = s.quiet_hours_start || "22:00";
+  $("#quiet_hours_end").value = s.quiet_hours_end || "08:00";
+  $("#computer_enabled").checked = s.computer_enabled !== false;
+  $("#web_search_enabled").checked = s.web_search_enabled !== false;
+  $("#tavilyHint").textContent = s.tavily_api_key_set ? "（已配置，留空不改）" : "";
+  const sug = browserTimezone();
+  $("#tzSuggest").textContent = sug && sug !== userTimezone ? `（浏览器建议 ${sug}，可手动改）` : "";
+  $("#preset_info").value = `${s.preset_id || "—"} · sidecar=${s.start_memory_sidecar ? "on" : "off"} · reminders=${s.reminders_enabled ? "on" : "off"}`;
   $("#keyHint").textContent = s.llm_api_key_set ? "（已配置，留空不改）" : "";
+  try {
+    const sk = await api("/api/skills");
+    $("#skills_info").value = `${sk.count || 0} · ${sk.skills_dir || ""}`;
+  } catch {
+    $("#skills_info").value = "不可用";
+  }
+  try {
+    const m = await api("/api/mcp/status");
+    const okN = (m.servers || []).filter((x) => x.ok).length;
+    $("#mcp_info").value = `${m.enabled ? "on" : "off"} · 服 ${okN}/${(m.servers || []).length} · 工具 ${m.tool_count || 0} · ${m.config_path || ""}`;
+  } catch {
+    $("#mcp_info").value = "不可用";
+  }
+  try {
+    const cfg = await api("/api/mcp/servers");
+    $("#mcp_json").value = JSON.stringify(cfg.mcpServers || {}, null, 2);
+  } catch {
+    $("#mcp_json").value = "{}";
+  }
 }
 
 $("#saveSettings").onclick = async () => {
@@ -609,14 +787,42 @@ $("#saveSettings").onclick = async () => {
     atom_memory_base_url: $("#atom_url").value,
     default_warmth: Number($("#default_warmth").value),
     show_memory_hints: $("#show_memory_hints").checked,
+    user_timezone: $("#user_timezone").value.trim() || userTimezone,
+    quiet_hours_enabled: $("#quiet_hours_enabled").checked,
+    quiet_hours_start: $("#quiet_hours_start").value.trim() || "22:00",
+    quiet_hours_end: $("#quiet_hours_end").value.trim() || "08:00",
+    computer_enabled: $("#computer_enabled").checked,
+    web_search_enabled: $("#web_search_enabled").checked,
   };
   const key = $("#llm_api_key").value;
   if (key) body.llm_api_key = key;
+  const tavily = $("#tavily_api_key").value;
+  if (tavily) body.tavily_api_key = tavily;
   const s = await api("/api/settings", { method: "PUT", body: JSON.stringify(body) });
   showMemoryHints = !!s.show_memory_hints;
+  userTimezone = s.user_timezone || userTimezone;
   $("#llm_api_key").value = "";
+  $("#tavily_api_key").value = "";
   await loadSettings();
   await probe();
+  await loadReminders();
+};
+
+$("#saveMcp").onclick = async () => {
+  let mcpServers;
+  try {
+    mcpServers = JSON.parse($("#mcp_json").value || "{}");
+  } catch (e) {
+    alert("MCP JSON 无效: " + e.message);
+    return;
+  }
+  await api("/api/mcp/servers", { method: "PUT", body: JSON.stringify({ mcpServers }) });
+  await loadSettings();
+};
+
+$("#reloadMcp").onclick = async () => {
+  await api("/api/mcp/reload", { method: "POST" });
+  await loadSettings();
 };
 
 init().catch((e) => { $("#err").textContent = String(e); });

@@ -3,7 +3,9 @@ from __future__ import annotations
 from server.config import Settings
 from server.core.chain.context import TurnContext
 from server.core.chain.types import NodeResult
+from server.core.computer.attachments import snapshot_workspace
 from server.core.conversation.store import ConversationStore
+from server.core.memory.client import AtomMemoryClient
 from server.core.persona.default import get_persona
 from server.core.persona.style import merge_style_knobs
 
@@ -11,9 +13,15 @@ from server.core.persona.style import merge_style_knobs
 class LoadContextNode:
     name = "LoadContext"
 
-    def __init__(self, store: ConversationStore, settings: Settings) -> None:
+    def __init__(
+        self,
+        store: ConversationStore,
+        settings: Settings,
+        memory: AtomMemoryClient | None = None,
+    ) -> None:
         self.store = store
         self.settings = settings
+        self.memory = memory
 
     async def process(self, ctx: TurnContext) -> NodeResult:
         session = await self.store.get_session(ctx.session_id)
@@ -36,6 +44,23 @@ class LoadContextNode:
             session.style_knobs,
             default_warmth=self.settings.default_warmth,
         )
+        ctx.extras["store"] = self.store
+        ctx.extras["settings"] = self.settings
+        if self.memory is not None:
+            ctx.extras["memory"] = self.memory
+
+        meta = ctx.request.client_meta or {}
+        proactive = bool(meta.get("proactive"))
+        ctx.extras["proactive"] = proactive
+        if proactive and self.settings.computer_enabled:
+            ctx.extras["ws_snapshot"] = snapshot_workspace(
+                self.settings.workspaces_dir, ctx.session_id
+            )
+        elif self.settings.computer_enabled:
+            # Ordinary turns also snapshot so write_file cards work.
+            ctx.extras["ws_snapshot"] = snapshot_workspace(
+                self.settings.workspaces_dir, ctx.session_id
+            )
 
         turns = await self.store.list_turns(
             ctx.session_id, limit=self.settings.history_max_messages

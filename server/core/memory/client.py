@@ -74,6 +74,8 @@ class AtomMemoryClient:
         max_atoms: int = 5,
         budget_chars: int = 400,
         detail: str = "statement",
+        policy: str = "layered",
+        neighbor_hops: int = 0,
     ) -> dict[str, Any]:
         if not await self._ensure_or_bust(uid):
             return {"context_block": "", "hits": []}
@@ -84,6 +86,8 @@ class AtomMemoryClient:
             "budget_chars": budget_chars,
             "include_recent_sources": True,
             "detail": detail,
+            "policy": policy,
+            "neighbor_hops": neighbor_hops,
         }
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -169,6 +173,51 @@ class AtomMemoryClient:
                 return resp.json()
         except Exception:
             logger.exception("atom-memory consolidate failed")
+            return None
+
+    async def synthesize(
+        self, uid: str, *, trigger: str = "synthesize"
+    ) -> dict[str, Any] | None:
+        """L2 scenario synthesis. Independent of consolidate; call on a slower cadence."""
+        return await self._post_space_job(
+            uid, "synthesize", {"trigger": trigger}
+        )
+
+    async def persona(
+        self, uid: str, *, trigger: str = "persona"
+    ) -> dict[str, Any] | None:
+        """L3 persona convergence. Independent of consolidate; call on a slower cadence."""
+        return await self._post_space_job(
+            uid, "persona", {"trigger": trigger}
+        )
+
+    async def _post_space_job(
+        self,
+        uid: str,
+        path: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if not await self._ensure_or_bust(uid):
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=self.consolidate_timeout) as client:
+                resp = await client.post(
+                    f"{self.base_url}/spaces/{uid}/{path}",
+                    headers=self._headers(),
+                    json=payload,
+                )
+                if resp.status_code == 404:
+                    self._ready.discard(uid)
+                    await self.ensure_space(uid)
+                    resp = await client.post(
+                        f"{self.base_url}/spaces/{uid}/{path}",
+                        headers=self._headers(),
+                        json=payload,
+                    )
+                resp.raise_for_status()
+                return resp.json()
+        except Exception:
+            logger.exception("atom-memory %s failed", path)
             return None
 
     async def list_atoms(

@@ -29,7 +29,7 @@ desk/dist/
 desk/.vite/
 
 # Legacy nested package path (if leftover)
-velora/
+todo
 
 # OS / IDE
 .DS_Store
