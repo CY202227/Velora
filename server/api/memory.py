@@ -5,11 +5,44 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from server.core.memory.labels import build_memory_summary
+
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 
 
 class CorrectionBody(BaseModel):
     text: str = Field(min_length=1)
+
+
+class ArchiveKindBody(BaseModel):
+    kind: str = Field(min_length=1)
+
+
+@router.get("/summary")
+async def memory_summary(request: Request) -> dict[str, Any]:
+    state = request.app.state.velora
+    uid = state.settings.memory_space_uid
+    try:
+        data = await state.memory.list_atoms(uid, page=1, page_size=100)
+    except Exception as exc:
+        raise HTTPException(502, f"atom-memory error: {exc}") from exc
+    results = data.get("results") or []
+    summary = build_memory_summary(results)
+    # Prefer service count when available and larger
+    count = data.get("count")
+    if isinstance(count, int) and count > summary["total"]:
+        # Rebuild headline with real total while keeping capped sections
+        parts = [
+            f"{s['label']} {s['count']}" for s in summary["sections"]
+        ]
+        if count == 0:
+            summary["headline"] = "还没有记住什么。可以说「请记住…」。"
+        else:
+            summary["headline"] = f"已记住 {count} 条" + (
+                f"：{' · '.join(parts)}" if parts else ""
+            )
+        summary["total"] = count
+    return summary
 
 
 @router.get("/atoms")
@@ -27,6 +60,43 @@ async def list_atoms(
         )
     except Exception as exc:
         raise HTTPException(502, f"atom-memory error: {exc}") from exc
+
+
+@router.post("/atoms/archive-kind")
+async def archive_kind(body: ArchiveKindBody, request: Request) -> dict[str, Any]:
+    state = request.app.state.velora
+    uid = state.settings.memory_space_uid
+    kind = body.kind.strip()
+    try:
+        data = await state.memory.list_atoms(
+            uid, page=1, page_size=100, kind=kind
+        )
+    except Exception as exc:
+        raise HTTPException(502, f"atom-memory error: {exc}") from exc
+
+    archived = 0
+    failed = 0
+    errors: list[str] = []
+    for atom in data.get("results") or []:
+        key = atom.get("key")
+        if not key:
+            continue
+        status = str(atom.get("status") or "active").lower()
+        if status in ("archived", "deleted", "tombstone"):
+            continue
+        try:
+            await state.memory.archive_atom(uid, str(key))
+            archived += 1
+        except Exception as exc:
+            failed += 1
+            errors.append(f"{key}: {exc}")
+    return {
+        "ok": failed == 0,
+        "kind": kind,
+        "archived": archived,
+        "failed": failed,
+        "errors": errors[:10],
+    }
 
 
 @router.get("/atoms/{key}")

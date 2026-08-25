@@ -11,11 +11,18 @@ logger = logging.getLogger(__name__)
 
 
 class ConsolidateJob:
-    def __init__(self, client: AtomMemoryClient) -> None:
+    def __init__(
+        self,
+        client: AtomMemoryClient,
+        *,
+        layer_every_n: int = 5,
+    ) -> None:
         self.client = client
+        self.layer_every_n = layer_every_n
         self._queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
         self._task: asyncio.Task | None = None
         self._locks: dict[str, asyncio.Lock] = {}
+        self._scheduled_done = 0
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -37,6 +44,17 @@ class ConsolidateJob:
         lock = self._locks.setdefault(space_uid, asyncio.Lock())
         async with lock:
             await self.client.consolidate(space_uid, trigger=trigger)
+            await self._maybe_run_layers(space_uid, trigger)
+
+    async def _maybe_run_layers(self, space_uid: str, trigger: str) -> None:
+        """L2/L3 stay off the L1 path; only a slower scheduled cadence."""
+        if trigger != "scheduled" or self.layer_every_n <= 0:
+            return
+        self._scheduled_done += 1
+        if self._scheduled_done % self.layer_every_n != 0:
+            return
+        await self.client.synthesize(space_uid)
+        await self.client.persona(space_uid)
 
     async def _run(self) -> None:
         while True:

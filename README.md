@@ -1,7 +1,7 @@
 # Velora
 
-Personal LLM chat desk: cloud (OpenAI-compatible) and local models, optional external TTS, lasting memory via a separate HTTP memory service.  
-Not an IM bot framework.
+Personal LLM chat desk: cloud (OpenAI-compatible) and an optional **builtin local** model (self-managed GGUF + `llama-server`), optional external TTS, lasting memory via a separate HTTP memory service.  
+Builtin function calling (reminders / time / memory summary) plus optional MCP clients via `velora_data/mcp_server.json`. Not an IM bot framework.
 
 ## Layout
 
@@ -28,13 +28,21 @@ python -m venv .venv
 .venv\Scripts\pip install -e ".[memory,dev]"
 copy .env.example .env
 # set VELORA_LLM_API_KEY / VELORA_LLM_BASE_URL / VELORA_LLM_MODEL
-# set VELORA_START_MEMORY_SIDECAR=true to auto-start atom-memory on :8020
+# VELORA_START_MEMORY_SIDECAR=true (default) auto-starts atom-memory on :8020
 .venv\Scripts\python -m server.main
 ```
 
-Open http://127.0.0.1:8030/ for the built-in desk UI.
+Open http://127.0.0.1:8030/ for the built-in desk UI (built from `desk/` into `server/static`).
 
-If sidecar is off, start memory yourself (or keep a checkout under `refs/atom_memory`):
+After Desk UI changes: `cd desk && npm run build` (outputs to `server/static`), then hard-refresh the browser.
+
+### Builtin local small model (optional)
+
+Desk → 设置 → **使用本地小模型（Qwen3.8-4B Distill）** downloads ~2.8GB GGUF + a recent `llama-server` into `velora_data/models/` and `velora_data/bin/`, then serves OpenAI-compatible chat on `127.0.0.1:8040`. Requires a llama.cpp build with Qwen3.5 support (Velora pins a recent release). Closing the toggle restores the previous cloud URL/model. Set `VELORA_START_LOCAL_LLM_SIDECAR=true` only to auto-spawn when files are already present (never auto-downloads).
+
+If sidecar is off, start memory yourself (or keep a checkout under `refs/atom_memory`).
+Sidecar prefers `refs/atom_memory` on `PYTHONPATH` when that checkout exists, so local
+memory updates (layered recall / L2 synthesize / L3 persona) apply without a pip reinstall.
 
 ```bash
 cd refs/atom_memory

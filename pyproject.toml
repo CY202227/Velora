@@ -12,6 +12,9 @@ dependencies = [
     "aiosqlite>=0.20",
     "aiomysql>=0.2",
     "sse-starlette>=2.1",
+    "mcp>=1.8",
+    "croniter>=2.0",
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]
