@@ -335,6 +335,21 @@ body {
   margin-right: 0.5rem;
 }
 
+.bubble-time {
+  display: block;
+  margin-top: 0.45rem;
+  font-size: 0.68rem;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  color: var(--muted, #7a8494);
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+
+.bubble.user .bubble-time {
+  text-align: right;
+}
+
 .composer {
   display: flex;
   gap: 0.65rem;

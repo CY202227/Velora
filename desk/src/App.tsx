@@ -27,6 +27,7 @@ type Msg = {
   content: string;
   streaming?: boolean;
   source?: string;
+  created_at?: string;
   attachments?: Array<{ path: string; name: string; bytes: number; kind: string }>;
 };
 type LogItem = { id: number; t: string; title: string; payload: unknown; open?: boolean };
@@ -52,6 +53,23 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function formatMsgTime(iso: string | undefined, timeZone: string): string | null {
+  if (!iso) return null;
+  try {
+    return new Date(iso).toLocaleString("zh-CN", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  } catch {
+    return iso.slice(0, 16);
+  }
+}
+
 /** Build 5-field cron from local datetime-local value in user timezone. */
 function cronFromLocal(local: string, mode: "daily" | "weekdays" | "weekly"): string {
   const [, time = "09:00"] = local.split("T");
@@ -73,6 +91,7 @@ function turnToMsg(t: Turn): Msg {
     role: t.role as "user" | "assistant",
     content: t.content,
     source: t.source || "chat",
+    created_at: t.created_at,
     attachments: t.attachments || [],
   };
 }
@@ -336,10 +355,11 @@ export default function App() {
     setError(null);
     setMemHint(null);
     pushLog("user_message", { text }, false);
+    const sentAt = new Date().toISOString();
     setMsgs((m) => [
       ...m.filter((x) => x.source !== "opener"),
-      { role: "user", content: text },
-      { role: "assistant", content: "", streaming: true },
+      { role: "user", content: text, created_at: sentAt },
+      { role: "assistant", content: "", streaming: true, created_at: sentAt },
     ]);
     let acc = "";
     const hints: string[] = [];
@@ -349,7 +369,13 @@ export default function App() {
           acc += t;
           setMsgs((m) => {
             const copy = [...m];
-            copy[copy.length - 1] = { role: "assistant", content: acc, streaming: true };
+            const last = copy[copy.length - 1];
+            copy[copy.length - 1] = {
+              ...last,
+              role: "assistant",
+              content: acc,
+              streaming: true,
+            };
             return copy;
           });
         },
@@ -382,7 +408,13 @@ export default function App() {
       });
       setMsgs((m) => {
         const copy = [...m];
-        copy[copy.length - 1] = { role: "assistant", content: acc || copy[copy.length - 1].content };
+        const last = copy[copy.length - 1];
+        copy[copy.length - 1] = {
+          ...last,
+          role: "assistant",
+          content: acc || last.content,
+          streaming: false,
+        };
         return copy;
       });
       const turns = await api.listTurns(session.id);
@@ -645,7 +677,9 @@ export default function App() {
                   <div className="messages">
                     {msgs
                       .filter(visibleChatMsg)
-                      .map((m, i) => (
+                      .map((m, i) => {
+                        const timeLabel = formatMsgTime(m.created_at, tz);
+                        return (
                         <div
                           key={m.id || i}
                           className={`bubble ${m.role}${isReminderMsg(m) ? " reminder" : ""}`}
@@ -681,8 +715,10 @@ export default function App() {
                               })}
                             </div>
                           )}
+                          {timeLabel && <time className="bubble-time">{timeLabel}</time>}
                         </div>
-                      ))}
+                        );
+                      })}
                     <div ref={bottomRef} />
                   </div>
                 </>
