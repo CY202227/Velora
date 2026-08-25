@@ -35,6 +35,10 @@ class SettingsOut(BaseModel):
     computer_enabled: bool = True
     skills_dir: str = ""
     mcp_enabled: bool = True
+    local_llm_enabled: bool = False
+    local_llm_base_url: str = ""
+    local_llm_model: str = ""
+    start_local_llm_sidecar: bool = False
 
 
 class SettingsUpdate(BaseModel):
@@ -81,6 +85,10 @@ async def get_settings(request: Request) -> SettingsOut:
         computer_enabled=s.computer_enabled,
         skills_dir=s.skills_dir,
         mcp_enabled=s.mcp_enabled,
+        local_llm_enabled=s.local_llm_enabled,
+        local_llm_base_url=s.local_llm_base_url,
+        local_llm_model=s.local_llm_model,
+        start_local_llm_sidecar=s.start_local_llm_sidecar,
     )
 
 

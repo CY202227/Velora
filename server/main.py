@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from server.api import (
     chat,
     debug,
+    local_llm as local_llm_api,
     mcp as mcp_api,
     memory,
     reminders,
@@ -47,6 +48,9 @@ async def lifespan(app: FastAPI):
     state.memory.base_url = state.settings.atom_memory_base_url.rstrip("/")
     state.memory.api_key = state.settings.atom_memory_api_key
     state.memory_sidecar = start_memory_sidecar(state.settings)
+    if state.local_llm is not None:
+        state.local_llm.try_autostart()
+        state.provider.use_local_sampling = state.settings.local_llm_enabled
     state.consolidate_job.start()
     state.reminder_job.start()
     await state.mcp.start(state.tools)
@@ -60,12 +64,17 @@ async def lifespan(app: FastAPI):
     app.state.velora = state
     mcp_st = state.mcp.status()
     logger.info(
-        "Velora ready on %s:%s (llm=%s model=%s sidecar=%s reminders=%s tz=%s mcp_tools=%s)",
+        "Velora ready on %s:%s (llm=%s model=%s sidecar=%s local_llm=%s reminders=%s tz=%s mcp_tools=%s)",
         state.settings.host,
         state.settings.port,
         state.settings.llm_base_url,
         state.settings.llm_model,
         bool(state.memory_sidecar and state.memory_sidecar.started_by_us),
+        bool(
+            state.local_llm
+            and state.local_llm.sidecar
+            and state.local_llm.sidecar.started_by_us
+        ),
         state.settings.reminders_enabled,
         state.settings.user_timezone,
         mcp_st.get("tool_count", 0),
@@ -74,6 +83,8 @@ async def lifespan(app: FastAPI):
     await state.mcp.stop()
     await state.reminder_job.stop()
     await state.consolidate_job.stop()
+    if state.local_llm is not None:
+        state.local_llm.sidecar.stop()
     if state.memory_sidecar is not None:
         state.memory_sidecar.stop()
     await state.store.close()
@@ -97,10 +108,17 @@ def create_app() -> FastAPI:
     app.include_router(mcp_api.router)
     app.include_router(skills_api.router)
     app.include_router(settings_api.router)
+    app.include_router(local_llm_api.router)
     app.include_router(debug.router)
 
     if _STATIC.is_dir():
-        app.mount("/assets", StaticFiles(directory=_STATIC), name="assets")
+        assets_dir = _STATIC / "assets"
+        if assets_dir.is_dir():
+            app.mount(
+                "/assets",
+                StaticFiles(directory=assets_dir),
+                name="assets",
+            )
 
     @app.get("/health")
     async def health() -> dict:

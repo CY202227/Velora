@@ -198,6 +198,38 @@ async def test_compose_begin_dialogs_and_tool_filter() -> None:
 
 
 @pytest.mark.asyncio
+async def test_proactive_compose_strips_reminder_tools() -> None:
+    reg = ToolRegistry()
+    register_builtin_tools(reg)
+    persona = Persona(
+        id="t",
+        name="t",
+        system_prompt="sys",
+        begin_dialogs=[],
+        tool_names=None,
+    )
+    ctx = TurnContext(
+        request=TurnRequest(
+            session_id="s",
+            user_text="请按系统说明完成到期提醒，并直接通知用户。",
+            client_meta={"proactive": True, "reminder_note": "去上厕所"},
+        ),
+        session_id="s",
+        persona=persona,
+        style_knobs={"warmth": 35},
+        extras={"proactive": True},
+    )
+    await ComposePromptNode(reg).process(ctx)
+    names = {
+        (t.get("function") or {}).get("name") for t in ctx.extras["tools"]
+    }
+    assert "create_reminder" not in names
+    assert "list_reminders" not in names
+    assert "到期提醒" in (ctx.messages[0].get("content") or "")
+    assert "去上厕所" in (ctx.messages[0].get("content") or "")
+
+
+@pytest.mark.asyncio
 async def test_llm_tool_loop_final_text(store: ConversationStore) -> None:
     reg = ToolRegistry()
     register_builtin_tools(reg)

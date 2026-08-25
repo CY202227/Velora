@@ -1,4 +1,4 @@
-"""Deliver a due reminder by running the full TurnRouter chain."""
+"""Deliver a due reminder by running the chat chain as an outbound wake."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from server.core.chain.types import TurnRequest
 from server.core.conversation.store import ConversationStore, ReminderRow
 from server.core.reminders.quiet import in_quiet_hours, next_quiet_end_utc
 from server.core.reminders.schedule import CronExprError, next_fire_utc
+from server.core.reminders.text import finalize_reminder_reply
 
 logger = logging.getLogger("velora.reminders")
 
@@ -53,17 +54,19 @@ async def deliver_reminder(
     note = claimed.note
     request = TurnRequest(
         claimed.session_id,
-        user_text=f"定时任务（请执行后向用户汇报完成）：{note}",
+        # Synthetic wake for the LLM only — PersistTurn skips the user bubble.
+        user_text="时间到了，请用你一贯的语气当面提醒用户。",
         client_meta={
             "proactive": True,
             "reminder_id": claimed.id,
+            "reminder_note": note,
         },
     )
     try:
         ctx = await router.handle(request)
         # Proactive turns must not leave WAIT for the next user message.
         router.wait_registry.clear(claimed.session_id)
-        text = (ctx.assistant_text or "").strip() or f"提醒：{note}"
+        text = finalize_reminder_reply(note, ctx.assistant_text or "")
         kind = (claimed.schedule_kind or "once").lower()
         if kind == "cron" and claimed.cron_expr:
             try:

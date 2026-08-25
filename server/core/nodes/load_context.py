@@ -65,7 +65,12 @@ class LoadContextNode:
         turns = await self.store.list_turns(
             ctx.session_id, limit=self.settings.history_max_messages
         )
-        ctx.history = [{"role": t.role, "content": t.content} for t in turns]
+        # Hide synthetic reminder wakes from model history; keep assistant nudges.
+        ctx.history = [
+            {"role": t.role, "content": t.content}
+            for t in turns
+            if not (t.source == "reminder" and t.role == "user")
+        ]
 
         text = ctx.request.user_text.strip()
         ctx.is_correction = text.startswith("请记住") or text.startswith("记住：")

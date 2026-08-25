@@ -206,6 +206,54 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def _ensure_columns(sync_conn) -> None:
+    """Add columns introduced after first create_all (no full migrator)."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(sync_conn)
+    tables = set(insp.get_table_names())
+
+    def existing(table: str) -> set[str]:
+        if table not in tables:
+            return set()
+        return {c["name"] for c in insp.get_columns(table)}
+
+    turns_cols = existing("turns")
+    if "turns" in tables:
+        if "source" not in turns_cols:
+            sync_conn.execute(
+                text(
+                    "ALTER TABLE turns ADD COLUMN source VARCHAR(32) "
+                    "NOT NULL DEFAULT 'chat'"
+                )
+            )
+        if "attachments" not in turns_cols:
+            sync_conn.execute(
+                text(
+                    "ALTER TABLE turns ADD COLUMN attachments TEXT "
+                    "NOT NULL DEFAULT '[]'"
+                )
+            )
+
+    rem_cols = existing("reminders")
+    if "reminders" in tables:
+        if "schedule_kind" not in rem_cols:
+            sync_conn.execute(
+                text(
+                    "ALTER TABLE reminders ADD COLUMN schedule_kind "
+                    "VARCHAR(16) NOT NULL DEFAULT 'once'"
+                )
+            )
+        if "cron_expr" not in rem_cols:
+            sync_conn.execute(
+                text("ALTER TABLE reminders ADD COLUMN cron_expr VARCHAR(128)")
+            )
+        if "last_run_at" not in rem_cols:
+            sync_conn.execute(
+                text("ALTER TABLE reminders ADD COLUMN last_run_at DATETIME")
+            )
+
+
 class ConversationStore:
     def __init__(self, database_url: str) -> None:
         self.database_url = normalize_database_url(database_url)
@@ -223,6 +271,7 @@ class ConversationStore:
     async def init(self) -> None:
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(_ensure_columns)
 
     async def close(self) -> None:
         await self._engine.dispose()

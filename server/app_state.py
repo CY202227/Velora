@@ -13,6 +13,8 @@ from server.core.chain.router import TurnRouter
 from server.core.chain.wait_registry import WaitRegistry
 from server.core.computer import register_computer_tools
 from server.core.conversation.store import ConversationStore
+from server.core.local_llm.service import LocalLlmService
+from server.core.local_llm.sidecar import LocalLlmSidecar
 from server.core.memory.client import AtomMemoryClient
 from server.core.memory.consolidate import ConsolidateJob
 from server.core.memory.sidecar import MemorySidecar
@@ -47,6 +49,7 @@ class AppState:
     mcp: McpManager
     skills: SkillManager
     memory_sidecar: MemorySidecar | None = None
+    local_llm: LocalLlmService | None = None
 
 
 _COMPUTER_TOOL_NAMES = (
@@ -90,7 +93,11 @@ def build_app_state(settings: Settings) -> AppState:
         memory,
         layer_every_n=settings.memory_layer_every_n_consolidates,
     )
-    provider = OpenAICompatProvider(settings.llm_base_url, settings.llm_api_key)
+    provider = OpenAICompatProvider(
+        settings.llm_base_url,
+        settings.llm_api_key,
+        use_local_sampling=settings.local_llm_enabled,
+    )
     wait_registry = WaitRegistry()
     locks = SessionLockManager()
     tools = ToolRegistry()
@@ -126,6 +133,11 @@ def build_app_state(settings: Settings) -> AppState:
     executor = ChainExecutor(nodes, wait_registry=wait_registry)
     router = TurnRouter(executor, locks, wait_registry)
     reminder_job = ReminderJob(store, settings, router)
+    local_llm = LocalLlmService(
+        settings=settings,
+        provider=provider,
+        sidecar=LocalLlmSidecar(base_url=settings.local_llm_base_url),
+    )
     return AppState(
         settings=settings,
         store=store,
@@ -138,4 +150,5 @@ def build_app_state(settings: Settings) -> AppState:
         tools=tools,
         mcp=mcp,
         skills=skills,
+        local_llm=local_llm,
     )

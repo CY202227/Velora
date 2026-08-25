@@ -21,6 +21,7 @@ _KEYS = (
     "web_search_enabled",
     "tavily_api_key",
     "computer_enabled",
+    "local_llm_enabled",
 )
 
 
@@ -48,6 +49,9 @@ async def load_settings(
             settings.web_search_enabled = _as_bool(raw)
         elif key == "computer_enabled":
             settings.computer_enabled = _as_bool(raw)
+        elif key == "local_llm_enabled":
+            settings.local_llm_enabled = _as_bool(raw)
+            provider.use_local_sampling = settings.local_llm_enabled
         elif key == "llm_base_url":
             settings.llm_base_url = raw.rstrip("/")
             provider.base_url = settings.llm_base_url
@@ -70,6 +74,8 @@ async def load_settings(
             settings.quiet_hours_end = raw.strip() or settings.quiet_hours_end
         elif key == "tavily_api_key":
             settings.tavily_api_key = raw
+
+    provider.use_local_sampling = settings.local_llm_enabled
 
 
 async def save_settings(store: ConversationStore, settings: Settings) -> None:
@@ -100,4 +106,8 @@ async def save_settings(store: ConversationStore, settings: Settings) -> None:
     await store.set_setting(
         "computer_enabled",
         "true" if settings.computer_enabled else "false",
+    )
+    await store.set_setting(
+        "local_llm_enabled",
+        "true" if settings.local_llm_enabled else "false",
     )

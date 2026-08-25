@@ -80,6 +80,34 @@ export type Settings = {
   computer_enabled?: boolean;
   skills_dir?: string;
   mcp_enabled?: boolean;
+  local_llm_enabled?: boolean;
+  local_llm_base_url?: string;
+  local_llm_model?: string;
+  start_local_llm_sidecar?: boolean;
+};
+
+export type LocalLlmStatus = {
+  enabled: boolean;
+  ready: boolean;
+  running: boolean;
+  pid: number | null;
+  busy: boolean;
+  download: {
+    label: string;
+    bytes_done: number;
+    bytes_total: number;
+    percent: number | null;
+    status: string;
+    error: string | null;
+  };
+  model: string;
+  base_url: string;
+  gguf_expected_bytes: number;
+  manifest: {
+    hf_repo: string;
+    gguf_filename: string;
+    llama_note: string;
+  };
 };
 
 export type McpServerEntry = {
@@ -221,6 +249,16 @@ export const api = {
   patchSession: (id: string, body: { warmth?: number; tts_enabled?: boolean; model?: string }) =>
     json<Session>(`/api/sessions/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   getSettings: () => json<Settings>("/api/settings"),
+  getLocalLlmStatus: () => json<LocalLlmStatus>("/api/local-llm/status"),
+  enableLocalLlm: () =>
+    json<LocalLlmStatus>("/api/local-llm/enable", { method: "POST", body: "{}" }),
+  disableLocalLlm: () =>
+    json<LocalLlmStatus>("/api/local-llm/disable", { method: "POST", body: "{}" }),
+  cancelLocalLlmDownload: () =>
+    json<LocalLlmStatus>("/api/local-llm/cancel-download", {
+      method: "POST",
+      body: "{}",
+    }),
   updateSettings: (
     body: Partial<{
       llm_base_url: string;

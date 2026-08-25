@@ -9,6 +9,12 @@ from typing import Any
 
 import httpx
 
+from server.core.local_llm.manifest import (
+    DEFAULT_TEMPERATURE,
+    DEFAULT_TOP_K,
+    DEFAULT_TOP_P,
+)
+from server.core.local_llm.think import ThinkStreamFilter, strip_think
 from server.core.provider.base import ChatResult, ToolCall
 
 logger = logging.getLogger(__name__)
@@ -21,16 +27,34 @@ class OpenAICompatProvider:
         api_key: str,
         *,
         timeout: float = 120.0,
+        strip_think_blocks: bool = True,
+        use_local_sampling: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        self.strip_think_blocks = strip_think_blocks
+        self.use_local_sampling = use_local_sampling
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
+
+    def _maybe_sampling(self, payload: dict[str, Any]) -> None:
+        if not self.use_local_sampling:
+            return
+        payload.setdefault("temperature", DEFAULT_TEMPERATURE)
+        payload.setdefault("top_p", DEFAULT_TOP_P)
+        payload.setdefault("top_k", DEFAULT_TOP_K)
+
+    def _clean(self, text: str | None) -> str | None:
+        if text is None:
+            return None
+        if not self.strip_think_blocks:
+            return text
+        return strip_think(text)
 
     async def complete(
         self,
@@ -56,6 +80,7 @@ class OpenAICompatProvider:
             "messages": messages,
             "stream": False,
         }
+        self._maybe_sampling(payload)
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice if tool_choice is not None else "auto"
@@ -75,6 +100,7 @@ class OpenAICompatProvider:
         content = message.get("content")
         if content is not None and not isinstance(content, str):
             content = str(content)
+        content = self._clean(content)
         raw_calls = message.get("tool_calls") or []
         tool_calls: list[ToolCall] = []
         for tc in raw_calls:
@@ -103,11 +129,13 @@ class OpenAICompatProvider:
         model: str,
     ) -> AsyncIterator[str]:
         url = f"{self.base_url}/chat/completions"
-        payload = {
+        payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": True,
         }
+        self._maybe_sampling(payload)
+        filt = ThinkStreamFilter() if self.strip_think_blocks else None
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             async with client.stream(
                 "POST",
@@ -137,5 +165,15 @@ class OpenAICompatProvider:
                         continue
                     delta = choices[0].get("delta") or {}
                     content = delta.get("content")
-                    if content:
+                    if not content:
+                        continue
+                    if filt is None:
                         yield content
+                    else:
+                        piece = filt.feed(content)
+                        if piece:
+                            yield piece
+                if filt is not None:
+                    tail = filt.flush()
+                    if tail:
+                        yield tail

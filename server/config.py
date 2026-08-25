@@ -48,9 +48,19 @@ class Settings(BaseSettings):
     # 0 = more assistant, 100 = more companion (new sessions)
     default_warmth: int = 35
 
-    # local-default preset / optional atom-memory sidecar
+    # local-default preset: spawn atom-memory on :8020 with Velora
     preset_id: str = "local-default"
-    start_memory_sidecar: bool = False
+    start_memory_sidecar: bool = True
+
+    # Builtin local LLM (GGUF + llama-server sidecar)
+    local_llm_enabled: bool = False
+    local_llm_base_url: str = "http://127.0.0.1:8040/v1"
+    local_llm_model: str = "qwen3.8-4b-distill"
+    local_llm_port: int = 8040
+    local_llm_ctx: int = 4096
+    start_local_llm_sidecar: bool = False
+    models_dir: str = f"{(_DATA / 'models').as_posix()}"
+    bin_dir: str = f"{(_DATA / 'bin').as_posix()}"
 
     # reminders (explicit; quiet hours in user timezone)
     reminders_enabled: bool = True
@@ -86,4 +96,7 @@ class Settings(BaseSettings):
 
 def get_settings() -> Settings:
     _DATA.mkdir(parents=True, exist_ok=True)
-    return Settings()
+    settings = Settings()
+    Path(settings.models_dir).mkdir(parents=True, exist_ok=True)
+    Path(settings.bin_dir).mkdir(parents=True, exist_ok=True)
+    return settings

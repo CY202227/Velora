@@ -136,6 +136,7 @@ def start_memory_sidecar(settings: Settings) -> MemorySidecar:
     if settings.atom_memory_api_key:
         env["ATOMMEM_API_KEY"] = settings.atom_memory_api_key
     refs_root = atom_memory_root()
+    python_exe = sys.executable
     if refs_root is not None:
         existing = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = (
@@ -144,9 +145,18 @@ def start_memory_sidecar(settings: Settings) -> MemorySidecar:
             else f"{refs_root}{os.pathsep}{existing}"
         )
         logger.info("atom-memory sidecar using local checkout %s", refs_root)
+        # Prefer the checkout's own venv so deps match atom-memory.
+        for candidate in (
+            refs_root / ".venv" / "Scripts" / "python.exe",
+            refs_root / ".venv" / "bin" / "python",
+        ):
+            if candidate.is_file():
+                python_exe = str(candidate)
+                logger.info("atom-memory sidecar python=%s", python_exe)
+                break
 
     cmd = [
-        sys.executable,
+        python_exe,
         "-m",
         "uvicorn",
         app,
@@ -158,13 +168,16 @@ def start_memory_sidecar(settings: Settings) -> MemorySidecar:
         "info",
     ]
     logger.info("spawning atom-memory sidecar: %s", " ".join(cmd))
+    log_path = _ROOT / "velora_data" / "atom_memory_sidecar.log"
     try:
+        # Keep handle open for process lifetime (closed when Velora exits).
+        log_f = open(log_path, "ab", buffering=0)  # noqa: SIM115
         proc = subprocess.Popen(
             cmd,
             cwd=str(_ROOT),
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
         )
     except Exception:
         logger.exception("failed to spawn atom-memory sidecar")

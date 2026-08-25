@@ -171,14 +171,13 @@ async def test_runner_once_via_router(store: ConversationStore) -> None:
 
     async def handle(request: TurnRequest, **kwargs):
         del kwargs
+        assert request.client_meta.get("proactive") is True
+        assert request.client_meta.get("reminder_note") == "喝水"
         await store.add_turn(
-            sess.id, "user", request.user_text, source="reminder"
-        )
-        await store.add_turn(
-            sess.id, "assistant", "该喝水了。", source="reminder"
+            sess.id, "assistant", "该喝水啦，起身喝一杯吧。", source="reminder"
         )
         ctx = TurnContext(request=request, session_id=request.session_id)
-        ctx.assistant_text = "该喝水了。"
+        ctx.assistant_text = "该喝水啦，起身喝一杯吧。"
         return ctx
 
     router = FakeRouter()
@@ -191,6 +190,7 @@ async def test_runner_once_via_router(store: ConversationStore) -> None:
     updated = await store.get_reminder(rem.id)
     assert updated is not None
     assert updated.status == "delivered"
+    assert updated.deliver_text == "该喝水啦，起身喝一杯吧。"
     turns = await store.list_turns(sess.id)
     assert any(t.source == "reminder" and t.role == "assistant" for t in turns)
 
@@ -221,6 +221,7 @@ async def test_runner_cron_advances_due(store: ConversationStore) -> None:
     assert updated is not None
     assert updated.status == "pending"
     assert updated.due_at > rem.due_at
+    assert updated.deliver_text == "日报已整理。"
     assert router.wait_registry.cleared == [sess.id]
 
 
@@ -370,3 +371,44 @@ async def test_quiet_settings_persist(store: ConversationStore) -> None:
     assert loaded.quiet_hours_enabled is False
     assert loaded.quiet_hours_start == "23:00"
     assert loaded.quiet_hours_end == "07:00"
+
+
+def test_finalize_reminder_reply_rewrites_setup_echo() -> None:
+    from server.core.reminders.text import finalize_reminder_reply
+
+    assert finalize_reminder_reply("去上厕所", "该起身去上厕所了。") == (
+        "该起身去上厕所了。"
+    )
+    assert finalize_reminder_reply(
+        "去上厕所",
+        "已设置 5 分钟后的提醒，届时我会提醒你。",
+    ) == "嘿，到点了——该去上厕所啦。"
+    assert finalize_reminder_reply(
+        "去上厕所",
+        "收到。已为你设置定时提醒：16:45 去上厕所",
+    ) == "嘿，到点了——该去上厕所啦。"
+    assert finalize_reminder_reply("开会", "") == "嘿，到点了——该开会啦。"
+
+
+@pytest.mark.asyncio
+async def test_runner_rewrites_setup_echo_from_llm(
+    store: ConversationStore,
+) -> None:
+    sess = await store.create_session(
+        persona_id="p", memory_space_uid="u", model="m"
+    )
+    rem = await store.create_reminder(
+        session_id=sess.id,
+        note="去上厕所",
+        due_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    router = FakeRouter(text="已设置 5 分钟后的提醒")
+    settings = Settings(quiet_hours_enabled=False, reminders_enabled=True)
+    ok = await deliver_reminder(
+        rem, store=store, settings=settings, router=router  # type: ignore[arg-type]
+    )
+    assert ok is True
+    updated = await store.get_reminder(rem.id)
+    assert updated is not None
+    assert updated.deliver_text == "嘿，到点了——该去上厕所啦。"
+    assert len(router.calls) == 1

@@ -15,5 +15,12 @@
     "app": "atom_memory.main:app",
     "database_url": "sqlite:///./velora_data/atom_memory.db",
     "sync_llm_to_memory": true
+  },
+  "local_llm": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8040,
+    "ctx": 4096,
+    "model_alias": "qwen3.8-4b-distill"
   }
 }

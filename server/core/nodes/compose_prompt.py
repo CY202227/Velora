@@ -31,10 +31,19 @@ class ComposePromptNode:
         warmth = clamp_warmth(ctx.style_knobs.get("warmth", 35))
         system_parts.append(warmth_instruction(warmth))
         if ctx.extras.get("proactive"):
+            note = ""
+            meta = ctx.request.client_meta or {}
+            if isinstance(meta.get("reminder_note"), str):
+                note = meta["reminder_note"].strip()
             system_parts.append(
-                "这是一次定时任务唤醒，不是用户刚发来的闲聊。"
-                "请按事项执行：可用工具完成工作，少寒暄，不要连环追问。"
-                "产出文件必须写在当前会话 workspace；办完后直接向用户汇报结果。"
+                "这是一次「到期提醒」主动推送：事项时间已到，不是用户刚发来的新消息。"
+                "请用当前会话 warmth 对应的语气，像当面开口提醒一样说一两句中文；"
+                "点明事项，可以带一点关心或俏皮，但不要写成系统通知或「提醒你：」模板句。"
+                "禁止再说「已设置／已帮你记下／届时我会提醒」；"
+                "禁止调用 create_reminder；禁止追问「还有别的吗」。"
+                "若事项需要本机工具才能完成，先办再简短汇报；"
+                "纯口头提醒则不要调用工具。"
+                + (f"\n到期事项：{note}" if note else "")
             )
         if ctx.memory_block.strip():
             system_parts.append(
@@ -72,6 +81,14 @@ class ComposePromptNode:
         tools_payload: list[dict[str, Any]] = []
         if self._tools is not None:
             tools_payload = self._tools.openai_tools(ctx.persona.tool_names)
+            if ctx.extras.get("proactive"):
+                # Prevent re-scheduling during delivery wake.
+                block = {"create_reminder", "list_reminders"}
+                tools_payload = [
+                    t
+                    for t in tools_payload
+                    if ((t.get("function") or {}).get("name") not in block)
+                ]
         ctx.extras["tools"] = tools_payload
 
         await ctx.publish(
