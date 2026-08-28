@@ -941,227 +941,338 @@ export default function App() {
 
         {tab === "persona" && (
           <div className="persona-stage">
-            <div className="persona-column">
-              <div className="section-head">
-                <h1>人格库</h1>
-                <p className="sub">导入酒馆 V2 卡（JSON/PNG），或手写设定；对话顶栏可切换。</p>
-              </div>
-              <div className="row">
-                <button type="button" className="btn ghost" onClick={startNewPersonaDraft}>
-                  新建
-                </button>
-                <label className="btn ghost file-btn">
-                  导入 JSON/PNG
-                  <input
-                    type="file"
-                    accept=".json,.png,application/json,image/png"
-                    hidden
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      e.target.value = "";
-                      if (!f) return;
-                      void (async () => {
-                        try {
-                          const p = await api.importPersonaFile(f);
-                          await loadPersonas();
-                          loadPersonaIntoDraft(p);
-                          setPersonaMsg(`已导入：${p.name}`);
-                        } catch (err) {
-                          setPersonaMsg(err instanceof Error ? err.message : String(err));
-                        }
-                      })();
-                    }}
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="btn ghost"
-                  disabled={!session || !personaEditId}
-                  onClick={() => {
-                    if (personaEditId) void switchPersona(personaEditId);
-                  }}
-                >
-                  应用到当前会话
-                </button>
-                <button
-                  type="button"
-                  className="btn ghost"
-                  disabled={!personaEditId}
-                  onClick={() => {
-                    if (!personaEditId) return;
-                    void api
-                      .updateSettings({ default_persona_id: personaEditId })
-                      .then((s) => {
-                        setSettings(s);
-                        setPersonaMsg("已设为默认人格");
-                      })
-                      .catch((err) => setPersonaMsg(String(err)));
-                  }}
-                >
-                  设为默认
-                </button>
-              </div>
-              {personaMsg && <div className="sub">{personaMsg}</div>}
-              <ul className="persona-list">
-                {personas.map((p) => (
-                  <li key={p.id}>
-                    <button
-                      type="button"
-                      className={`persona-card ${personaEditId === p.id || (!personaEditId && p.id === session?.persona_id) ? "active" : ""}`}
-                      onClick={() => loadPersonaIntoDraft(p)}
-                    >
-                      {p.has_avatar ? (
-                        <img className="persona-avatar" src={api.personaAvatarUrl(p.id)} alt="" />
-                      ) : (
-                        <span className="persona-avatar placeholder">{p.name.slice(0, 1)}</span>
-                      )}
-                      <span>
-                        <strong>{p.name}</strong>
-                        <em className="sub">{p.source}{p.readonly ? " · 只读" : ""}</em>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              <div className="form persona-form">
-                <label>
-                  名称
-                  <input
-                    value={personaDraft.name}
-                    onChange={(e) => setPersonaDraft((d) => ({ ...d, name: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Description
-                  <textarea
-                    rows={5}
-                    value={personaDraft.description}
-                    onChange={(e) => setPersonaDraft((d) => ({ ...d, description: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Personality
-                  <textarea
-                    rows={3}
-                    value={personaDraft.personality}
-                    onChange={(e) => setPersonaDraft((d) => ({ ...d, personality: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Scenario
-                  <textarea
-                    rows={3}
-                    value={personaDraft.scenario}
-                    onChange={(e) => setPersonaDraft((d) => ({ ...d, scenario: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  First message
-                  <textarea
-                    rows={4}
-                    value={personaDraft.opener}
-                    onChange={(e) => setPersonaDraft((d) => ({ ...d, opener: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Alternate greetings（用 --- 分隔）
-                  <textarea
-                    rows={4}
-                    value={personaDraft.alternate_greetings}
-                    onChange={(e) =>
-                      setPersonaDraft((d) => ({ ...d, alternate_greetings: e.target.value }))
-                    }
-                  />
-                </label>
-                <label>
-                  System prompt（可空，空则用 description 等拼装）
-                  <textarea
-                    rows={4}
-                    value={personaDraft.system_prompt}
-                    onChange={(e) => setPersonaDraft((d) => ({ ...d, system_prompt: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Post-history instructions
-                  <textarea
-                    rows={2}
-                    value={personaDraft.post_history_instructions}
-                    onChange={(e) =>
-                      setPersonaDraft((d) => ({
-                        ...d,
-                        post_history_instructions: e.target.value,
-                      }))
-                    }
-                  />
-                </label>
-                {loreEntries.length > 0 && (
-                  <div className="lore-preview">
-                    <p className="sub">Character book（{loreEntries.length} 条，导入后可只读浏览）</p>
-                    <ul>
-                      {loreEntries.slice(0, 20).map((entry, i) => {
-                        const keys = Array.isArray(entry.keys)
-                          ? (entry.keys as string[]).join(", ")
-                          : "";
-                        const content = String(entry.content || "");
-                        const constant = !!entry.constant;
-                        return (
-                          <li key={i}>
-                            <strong>{constant ? "常驻" : keys || "(无 key)"}</strong>
-                            <span>{content.slice(0, 120)}{content.length > 120 ? "…" : ""}</span>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                )}
-                {personaEditId && !personaReadonly && (
+            <div className="persona-layout">
+              <aside className="persona-rail">
+                <div className="section-head">
+                  <h1>人格</h1>
+                  <p className="sub">谁在说话。导入酒馆卡，或手写设定。</p>
+                </div>
+                <div className="persona-rail-actions">
+                  <button type="button" className="btn ghost" onClick={startNewPersonaDraft}>
+                    新建
+                  </button>
                   <label className="btn ghost file-btn">
-                    上传头像
+                    导入卡
                     <input
                       type="file"
-                      accept="image/*"
+                      accept=".json,.png,application/json,image/png"
                       hidden
                       onChange={(e) => {
                         const f = e.target.files?.[0];
                         e.target.value = "";
-                        if (!f || !personaEditId) return;
-                        void api
-                          .uploadPersonaAvatar(personaEditId, f)
-                          .then(async () => {
+                        if (!f) return;
+                        void (async () => {
+                          try {
+                            const p = await api.importPersonaFile(f);
                             await loadPersonas();
-                            setPersonaMsg("头像已更新");
-                          })
-                          .catch((err) => setPersonaMsg(String(err)));
+                            loadPersonaIntoDraft(p);
+                            setPersonaMsg(`已导入：${p.name}`);
+                          } catch (err) {
+                            setPersonaMsg(err instanceof Error ? err.message : String(err));
+                          }
+                        })();
                       }}
                     />
                   </label>
-                )}
-                <div className="row">
-                  <button type="button" onClick={() => void savePersonaDraft()}>
-                    {personaReadonly ? "另存为新人格" : "保存人格"}
-                  </button>
-                  {personaEditId && !personaReadonly && (
+                </div>
+                <ul className="persona-list">
+                  {personas.map((p) => {
+                    const active =
+                      personaEditId === p.id ||
+                      (!personaEditId && p.id === session?.persona_id);
+                    const sourceLabel =
+                      p.source === "builtin"
+                        ? "内置"
+                        : p.source === "import"
+                          ? "导入"
+                          : "自定义";
+                    return (
+                      <li key={p.id}>
+                        <button
+                          type="button"
+                          className={`persona-card ${active ? "active" : ""}`}
+                          onClick={() => loadPersonaIntoDraft(p)}
+                        >
+                          {p.has_avatar ? (
+                            <img
+                              className="persona-avatar"
+                              src={api.personaAvatarUrl(p.id)}
+                              alt=""
+                            />
+                          ) : (
+                            <span className="persona-avatar placeholder">
+                              {p.name.slice(0, 1)}
+                            </span>
+                          )}
+                          <span className="persona-card-meta">
+                            <strong>{p.name}</strong>
+                            <em>
+                              {sourceLabel}
+                              {p.readonly ? " · 只读" : ""}
+                              {p.id === session?.persona_id ? " · 当前会话" : ""}
+                              {p.id === settings?.default_persona_id ? " · 默认" : ""}
+                            </em>
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </aside>
+
+              <section className="persona-editor">
+                <div className="persona-editor-head">
+                  <div>
+                    <h2>{personaDraft.name.trim() || (personaEditId ? "编辑人格" : "新建人格")}</h2>
+                    <p className="sub">
+                      {personaReadonly
+                        ? "内置人格只读；保存将复制为新人格。"
+                        : "改完后保存，可在对话顶栏切换。"}
+                    </p>
+                  </div>
+                  <div className="persona-editor-actions">
                     <button
                       type="button"
                       className="btn ghost"
+                      disabled={!session || !personaEditId}
+                      onClick={() => {
+                        if (personaEditId) void switchPersona(personaEditId);
+                      }}
+                    >
+                      用到当前会话
+                    </button>
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      disabled={!personaEditId}
                       onClick={() => {
                         if (!personaEditId) return;
-                        if (!window.confirm("删除该人格？")) return;
                         void api
-                          .deletePersona(personaEditId)
-                          .then(async () => {
-                            startNewPersonaDraft();
-                            await loadPersonas();
-                            setPersonaMsg("已删除");
+                          .updateSettings({ default_persona_id: personaEditId })
+                          .then((s) => {
+                            setSettings(s);
+                            setPersonaMsg("已设为默认人格");
                           })
                           .catch((err) => setPersonaMsg(String(err)));
                       }}
                     >
-                      删除
+                      设为默认
                     </button>
-                  )}
+                  </div>
                 </div>
-              </div>
+
+                {personaMsg && <div className="persona-toast">{personaMsg}</div>}
+
+                <div className="form persona-form">
+                  <div className="persona-field-group">
+                    <h3 className="persona-group-title">基本</h3>
+                    <div className="persona-identity">
+                      <div className="persona-avatar-block">
+                        {personaEditId &&
+                        personas.find((x) => x.id === personaEditId)?.has_avatar ? (
+                          <img
+                            className="persona-avatar lg"
+                            src={api.personaAvatarUrl(personaEditId)}
+                            alt=""
+                          />
+                        ) : (
+                          <span className="persona-avatar lg placeholder">
+                            {(personaDraft.name || "?").slice(0, 1)}
+                          </span>
+                        )}
+                        {personaEditId && !personaReadonly && (
+                          <label className="btn ghost file-btn compact">
+                            换头像
+                            <input
+                              type="file"
+                              accept="image/*"
+                              hidden
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                e.target.value = "";
+                                if (!f || !personaEditId) return;
+                                void api
+                                  .uploadPersonaAvatar(personaEditId, f)
+                                  .then(async () => {
+                                    await loadPersonas();
+                                    setPersonaMsg("头像已更新");
+                                  })
+                                  .catch((err) => setPersonaMsg(String(err)));
+                              }}
+                            />
+                          </label>
+                        )}
+                      </div>
+                      <label className="grow">
+                        名称
+                        <input
+                          value={personaDraft.name}
+                          onChange={(e) =>
+                            setPersonaDraft((d) => ({ ...d, name: e.target.value }))
+                          }
+                          placeholder="角色显示名"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="persona-field-group">
+                    <h3 className="persona-group-title">角色设定</h3>
+                    <label>
+                      外貌与背景
+                      <span className="field-hint">对应卡片 description，会进入 system</span>
+                      <textarea
+                        rows={5}
+                        value={personaDraft.description}
+                        onChange={(e) =>
+                          setPersonaDraft((d) => ({ ...d, description: e.target.value }))
+                        }
+                        placeholder="外貌、身份、背景…"
+                      />
+                    </label>
+                    <div className="persona-field-row">
+                      <label>
+                        性格
+                        <span className="field-hint">personality</span>
+                        <textarea
+                          rows={4}
+                          value={personaDraft.personality}
+                          onChange={(e) =>
+                            setPersonaDraft((d) => ({ ...d, personality: e.target.value }))
+                          }
+                          placeholder="说话方式、脾气、偏好…"
+                        />
+                      </label>
+                      <label>
+                        场景
+                        <span className="field-hint">scenario</span>
+                        <textarea
+                          rows={4}
+                          value={personaDraft.scenario}
+                          onChange={(e) =>
+                            setPersonaDraft((d) => ({ ...d, scenario: e.target.value }))
+                          }
+                          placeholder="当前情境、地点、关系…"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="persona-field-group">
+                    <h3 className="persona-group-title">开场白</h3>
+                    <label>
+                      默认开场
+                      <span className="field-hint">空会话时第一条欢迎语</span>
+                      <textarea
+                        rows={3}
+                        value={personaDraft.opener}
+                        onChange={(e) =>
+                          setPersonaDraft((d) => ({ ...d, opener: e.target.value }))
+                        }
+                        placeholder="你好，我是…"
+                      />
+                    </label>
+                    <label>
+                      备选开场
+                      <span className="field-hint">多条用单独一行的 --- 分隔；对话页可左右切换</span>
+                      <textarea
+                        rows={4}
+                        value={personaDraft.alternate_greetings}
+                        onChange={(e) =>
+                          setPersonaDraft((d) => ({
+                            ...d,
+                            alternate_greetings: e.target.value,
+                          }))
+                        }
+                        placeholder={"另一句开场\n---\n再一句开场"}
+                      />
+                    </label>
+                  </div>
+
+                  <div className="persona-field-group">
+                    <h3 className="persona-group-title">进阶（可选）</h3>
+                    <label>
+                      系统提示
+                      <span className="field-hint">
+                        非空时优先用这段；可用 {"{{char}}"} / {"{{user}}"} / {"{{original}}"}
+                      </span>
+                      <textarea
+                        rows={4}
+                        value={personaDraft.system_prompt}
+                        onChange={(e) =>
+                          setPersonaDraft((d) => ({ ...d, system_prompt: e.target.value }))
+                        }
+                        placeholder="留空则按外貌、性格、场景自动拼装"
+                      />
+                    </label>
+                    <label>
+                      历史后指令
+                      <span className="field-hint">插在历史与本轮用户消息之间</span>
+                      <textarea
+                        rows={2}
+                        value={personaDraft.post_history_instructions}
+                        onChange={(e) =>
+                          setPersonaDraft((d) => ({
+                            ...d,
+                            post_history_instructions: e.target.value,
+                          }))
+                        }
+                        placeholder="例如：始终保持人设，不要跳出角色"
+                      />
+                    </label>
+                    {loreEntries.length > 0 && (
+                      <div className="lore-preview">
+                        <p className="persona-group-title">角色书</p>
+                        <p className="sub">已导入 {loreEntries.length} 条，对话时按关键词注入。</p>
+                        <ul>
+                          {loreEntries.slice(0, 20).map((entry, i) => {
+                            const keys = Array.isArray(entry.keys)
+                              ? (entry.keys as string[]).join("、")
+                              : "";
+                            const content = String(entry.content || "");
+                            const constant = !!entry.constant;
+                            return (
+                              <li key={i}>
+                                <strong>{constant ? "常驻" : keys || "（无关键词）"}</strong>
+                                <span>
+                                  {content.slice(0, 120)}
+                                  {content.length > 120 ? "…" : ""}
+                                </span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="persona-form-footer">
+                    <button type="button" onClick={() => void savePersonaDraft()}>
+                      {personaReadonly ? "另存为新人格" : "保存"}
+                    </button>
+                    {personaEditId && !personaReadonly && (
+                      <button
+                        type="button"
+                        className="btn ghost danger"
+                        onClick={() => {
+                          if (!personaEditId) return;
+                          if (!window.confirm("删除该人格？")) return;
+                          void api
+                            .deletePersona(personaEditId)
+                            .then(async () => {
+                              startNewPersonaDraft();
+                              await loadPersonas();
+                              setPersonaMsg("已删除");
+                            })
+                            .catch((err) => setPersonaMsg(String(err)));
+                        }}
+                      >
+                        删除
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
         )}
