@@ -346,8 +346,116 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-.bubble.user .bubble-time {
-  text-align: right;
+.greeting-swipe {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  justify-content: center;
+}
+
+.opener-preview {
+  margin-top: 1rem;
+  max-width: 36rem;
+  margin-inline: auto;
+  text-align: left;
+  white-space: pre-wrap;
+  opacity: 0.9;
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+.persona-stage,
+.persona-column {
+  width: min(920px, 100%);
+  margin: 0 auto;
+}
+
+.persona-list {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.65rem;
+}
+
+.persona-card {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+  cursor: pointer;
+}
+
+.persona-card.active {
+  border-color: rgba(47, 92, 74, 0.45);
+  background: rgba(47, 92, 74, 0.08);
+}
+
+.persona-card strong {
+  display: block;
+}
+
+.persona-card em {
+  font-style: normal;
+  font-size: 0.75rem;
+}
+
+.persona-avatar {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.persona-avatar.placeholder {
+  display: grid;
+  place-items: center;
+  background: var(--assist-wash);
+  font-size: 0.85rem;
+}
+
+.persona-form textarea {
+  min-height: 4rem;
+}
+
+.persona-avatar.topbar {
+  width: 1.65rem;
+  height: 1.65rem;
+}
+
+.lore-preview {
+  margin: 0.75rem 0;
+}
+
+.lore-preview ul {
+  list-style: none;
+  padding: 0;
+  margin: 0.35rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.lore-preview li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+}
+
+.lore-preview li strong {
+  font-size: 0.8rem;
 }
 
 .composer {

@@ -18,6 +18,7 @@ from server.api import (
     local_llm as local_llm_api,
     mcp as mcp_api,
     memory,
+    personas as personas_api,
     reminders,
     sessions,
     settings as settings_api,
@@ -105,6 +106,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(memory.router)
     app.include_router(reminders.router)
+    app.include_router(personas_api.router)
     app.include_router(mcp_api.router)
     app.include_router(skills_api.router)
     app.include_router(settings_api.router)

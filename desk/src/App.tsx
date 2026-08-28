@@ -11,6 +11,7 @@ import {
   type McpServerEntry,
   type McpStatus,
   type MemorySummary,
+  type Persona,
   type Reminder,
   type Session,
   type Settings,
@@ -20,7 +21,7 @@ import {
 
 type McpRow = { name: string; entry: McpServerEntry };
 
-type Tab = "chat" | "memory" | "settings";
+type Tab = "chat" | "memory" | "persona" | "settings";
 type Msg = {
   id?: string;
   role: "user" | "assistant";
@@ -146,6 +147,22 @@ export default function App() {
   const [localLlmMsg, setLocalLlmMsg] = useState<string | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [prefsOpen, setPrefsOpen] = useState(false);
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [personaEditId, setPersonaEditId] = useState<string | null>(null);
+  const [personaReadonly, setPersonaReadonly] = useState(false);
+  const [personaBook, setPersonaBook] = useState<Record<string, unknown> | null>(null);
+  const [personaDraft, setPersonaDraft] = useState({
+    name: "",
+    description: "",
+    personality: "",
+    scenario: "",
+    opener: "",
+    alternate_greetings: "",
+    post_history_instructions: "",
+    system_prompt: "",
+  });
+  const [personaMsg, setPersonaMsg] = useState<string | null>(null);
+  const [greetingIndex, setGreetingIndex] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const warmthTimer = useRef<number | null>(null);
   const lastTurnCount = useRef(0);
@@ -181,13 +198,30 @@ export default function App() {
     setReminders(list);
   }
 
+  async function loadPersonas() {
+    const list = await api.listPersonas();
+    setPersonas(list);
+    return list;
+  }
+
   async function selectSession(s: Session, opener?: string | null) {
     setSession(s);
     setWarmth(s.warmth ?? 35);
     setMemHint(null);
+    const gIdx = s.greeting_index ?? 0;
+    setGreetingIndex(gIdx);
     const turns = await api.listTurns(s.id);
     lastTurnCount.current = turns.length;
-    const welcome = opener ?? settings?.persona_opener;
+    let welcome = opener;
+    try {
+      const p = await api.getPersona(s.persona_id);
+      const greets = p.greetings?.length ? p.greetings : p.opener ? [p.opener] : [];
+      if (greets.length) {
+        welcome = greets[Math.min(gIdx, greets.length - 1)] || greets[0];
+      }
+    } catch {
+      /* keep opener */
+    }
     if (turns.length === 0 && welcome) {
       setMsgs([{ role: "assistant", content: welcome, source: "opener" }]);
     } else {
@@ -208,13 +242,17 @@ export default function App() {
         setTzSuggest(suggest);
         const s = await api.getSettings();
         setSettings(s);
+        await loadPersonas();
         let list = await api.listSessions();
         if (!list.length) {
-          const created = await api.createSession({ warmth: s.default_warmth });
+          const created = await api.createSession({
+            warmth: s.default_warmth,
+            persona_id: s.default_persona_id,
+          });
           list = [created];
         }
         setSessions(list);
-        await selectSession(list[0], s.persona_opener);
+        await selectSession(list[0]);
         await probe();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -294,6 +332,7 @@ export default function App() {
 
   useEffect(() => {
     if (tab === "memory") void refreshMemory().catch((e) => setError(String(e)));
+    if (tab === "persona") void loadPersonas().catch((e) => setError(String(e)));
     if (tab === "settings") {
       void probe();
       void loadMcpEditor();
@@ -431,11 +470,108 @@ export default function App() {
   }
 
   async function newSession() {
-    const s = await api.createSession({ warmth });
+    const s = await api.createSession({
+      warmth,
+      persona_id: session?.persona_id || settings?.default_persona_id,
+    });
     setSessions((xs) => [s, ...xs]);
     await selectSession(s);
     pushLog("new_session", s, false);
     await probe();
+  }
+
+  async function switchPersona(personaId: string) {
+    if (!session) return;
+    const s = await api.patchSession(session.id, {
+      persona_id: personaId,
+      greeting_index: 0,
+    });
+    setSession(s);
+    setSessions((xs) => xs.map((x) => (x.id === s.id ? s : x)));
+    setGreetingIndex(0);
+    const turns = await api.listTurns(s.id);
+    if (turns.length === 0) {
+      await selectSession(s);
+    }
+  }
+
+  async function swipeGreeting(delta: number) {
+    if (!session) return;
+    const p = personas.find((x) => x.id === session.persona_id) || (await api.getPersona(session.persona_id));
+    const greets = p.greetings?.length ? p.greetings : p.opener ? [p.opener] : [];
+    if (greets.length < 2) return;
+    const next = (greetingIndex + delta + greets.length) % greets.length;
+    setGreetingIndex(next);
+    await api.patchSession(session.id, { greeting_index: next });
+    setMsgs([{ role: "assistant", content: greets[next], source: "opener" }]);
+  }
+
+  function startNewPersonaDraft() {
+    setPersonaEditId(null);
+    setPersonaReadonly(false);
+    setPersonaBook(null);
+    setPersonaDraft({
+      name: "",
+      description: "",
+      personality: "",
+      scenario: "",
+      opener: "",
+      alternate_greetings: "",
+      post_history_instructions: "",
+      system_prompt: "",
+    });
+    setPersonaMsg(null);
+  }
+
+  function loadPersonaIntoDraft(p: Persona) {
+    setPersonaEditId(p.id);
+    setPersonaReadonly(!!p.readonly);
+    setPersonaBook((p.character_book as Record<string, unknown> | null) || null);
+    setPersonaDraft({
+      name: p.name,
+      description: p.description || "",
+      personality: p.personality || "",
+      scenario: p.scenario || "",
+      opener: p.opener || "",
+      alternate_greetings: (p.alternate_greetings || []).join("\n---\n"),
+      post_history_instructions: p.post_history_instructions || "",
+      system_prompt: p.system_prompt || "",
+    });
+    setPersonaMsg(p.readonly ? "内置人格只读；保存将另存为新人格" : null);
+  }
+
+  async function savePersonaDraft() {
+    const alts = personaDraft.alternate_greetings
+      .split(/\n---\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const body = {
+      name: personaDraft.name.trim() || "未命名",
+      description: personaDraft.description,
+      personality: personaDraft.personality,
+      scenario: personaDraft.scenario,
+      opener: personaDraft.opener || null,
+      alternate_greetings: alts,
+      post_history_instructions: personaDraft.post_history_instructions,
+      system_prompt: personaDraft.system_prompt || null,
+      character_book: personaBook,
+    };
+    try {
+      if (personaEditId && !personaReadonly) {
+        const p = await api.updatePersona(personaEditId, body);
+        setPersonaMsg(`已保存：${p.name}`);
+        setPersonaBook((p.character_book as Record<string, unknown> | null) || null);
+      } else {
+        const p = await api.createPersona(body);
+        setPersonaEditId(p.id);
+        setPersonaReadonly(false);
+        setPersonaBook((p.character_book as Record<string, unknown> | null) || null);
+        setPersonaMsg(`已创建：${p.name}`);
+      }
+      await loadPersonas();
+    } catch (e) {
+      setPersonaMsg(e instanceof Error ? e.message : String(e));
+    }
   }
 
   async function openAtom(key: string) {
@@ -571,6 +707,18 @@ export default function App() {
   const memBase = status?.memory.base_url || settings?.atom_memory_base_url || "http://127.0.0.1:8020";
   const space = status?.memory.space_uid || settings?.memory_space_uid || "";
   const chatEmpty = msgs.length === 0 || msgs.every((m) => m.source === "opener");
+  const activePersona =
+    personas.find((p) => p.id === session?.persona_id) || null;
+  const greetingCount = activePersona
+    ? (activePersona.greetings?.length
+        ? activePersona.greetings.length
+        : activePersona.opener
+          ? 1
+          : 0)
+    : 0;
+  const loreEntries = Array.isArray(personaBook?.entries)
+    ? (personaBook.entries as Array<Record<string, unknown>>)
+    : [];
 
   return (
     <div className="app">
@@ -585,6 +733,13 @@ export default function App() {
           </button>
           <button type="button" className={tab === "memory" ? "active" : ""} onClick={() => setTab("memory")}>
             记忆
+          </button>
+          <button
+            type="button"
+            className={tab === "persona" ? "active" : ""}
+            onClick={() => setTab("persona")}
+          >
+            人格
           </button>
           <button
             type="button"
@@ -605,6 +760,25 @@ export default function App() {
                 日程
               </button>
               <div className="session-menu">
+                {activePersona?.has_avatar && (
+                  <img
+                    className="persona-avatar topbar"
+                    src={api.personaAvatarUrl(activePersona.id)}
+                    alt=""
+                  />
+                )}
+                <select
+                  value={session?.persona_id || ""}
+                  onChange={(e) => void switchPersona(e.target.value)}
+                  aria-label="人格"
+                  title="切换人格"
+                >
+                  {personas.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
                 <select
                   value={session?.id || ""}
                   onChange={(e) => {
@@ -658,13 +832,33 @@ export default function App() {
               {chatEmpty ? (
                 <div className="chat-hero">
                   <p className="hero-brand">Velora</p>
-                  <h1>{settings?.persona_name || "日常助理"}</h1>
+                  <h1>{session?.persona_name || settings?.persona_name || "日常助理"}</h1>
                   <p className="sub">同一会话接上上下文；值得留下的会记入长期记忆。</p>
+                  {greetingCount > 1 && !!msgs.find((m) => m.source === "opener") && (
+                    <div className="greeting-swipe">
+                      <button type="button" className="btn ghost" onClick={() => void swipeGreeting(-1)}>
+                        上一开场
+                      </button>
+                      <span className="sub">
+                        开场 {greetingIndex + 1}/{greetingCount}
+                      </span>
+                      <button type="button" className="btn ghost" onClick={() => void swipeGreeting(1)}>
+                        下一开场
+                      </button>
+                    </div>
+                  )}
+                  {msgs
+                    .filter((m) => m.source === "opener")
+                    .map((m, i) => (
+                      <p key={i} className="opener-preview">
+                        {m.content}
+                      </p>
+                    ))}
                 </div>
               ) : (
                 <>
                   <div className="chat-head">
-                    <h1>{settings?.persona_name || "日常助理"}</h1>
+                    <h1>{session?.persona_name || settings?.persona_name || "日常助理"}</h1>
                   </div>
                   {memHint && (
                     <div className="mem-hint">
@@ -740,6 +934,233 @@ export default function App() {
                 <button type="button" disabled={busy || !input.trim()} onClick={() => void send()}>
                   发送
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "persona" && (
+          <div className="persona-stage">
+            <div className="persona-column">
+              <div className="section-head">
+                <h1>人格库</h1>
+                <p className="sub">导入酒馆 V2 卡（JSON/PNG），或手写设定；对话顶栏可切换。</p>
+              </div>
+              <div className="row">
+                <button type="button" className="btn ghost" onClick={startNewPersonaDraft}>
+                  新建
+                </button>
+                <label className="btn ghost file-btn">
+                  导入 JSON/PNG
+                  <input
+                    type="file"
+                    accept=".json,.png,application/json,image/png"
+                    hidden
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      e.target.value = "";
+                      if (!f) return;
+                      void (async () => {
+                        try {
+                          const p = await api.importPersonaFile(f);
+                          await loadPersonas();
+                          loadPersonaIntoDraft(p);
+                          setPersonaMsg(`已导入：${p.name}`);
+                        } catch (err) {
+                          setPersonaMsg(err instanceof Error ? err.message : String(err));
+                        }
+                      })();
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  disabled={!session || !personaEditId}
+                  onClick={() => {
+                    if (personaEditId) void switchPersona(personaEditId);
+                  }}
+                >
+                  应用到当前会话
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  disabled={!personaEditId}
+                  onClick={() => {
+                    if (!personaEditId) return;
+                    void api
+                      .updateSettings({ default_persona_id: personaEditId })
+                      .then((s) => {
+                        setSettings(s);
+                        setPersonaMsg("已设为默认人格");
+                      })
+                      .catch((err) => setPersonaMsg(String(err)));
+                  }}
+                >
+                  设为默认
+                </button>
+              </div>
+              {personaMsg && <div className="sub">{personaMsg}</div>}
+              <ul className="persona-list">
+                {personas.map((p) => (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      className={`persona-card ${personaEditId === p.id || (!personaEditId && p.id === session?.persona_id) ? "active" : ""}`}
+                      onClick={() => loadPersonaIntoDraft(p)}
+                    >
+                      {p.has_avatar ? (
+                        <img className="persona-avatar" src={api.personaAvatarUrl(p.id)} alt="" />
+                      ) : (
+                        <span className="persona-avatar placeholder">{p.name.slice(0, 1)}</span>
+                      )}
+                      <span>
+                        <strong>{p.name}</strong>
+                        <em className="sub">{p.source}{p.readonly ? " · 只读" : ""}</em>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <div className="form persona-form">
+                <label>
+                  名称
+                  <input
+                    value={personaDraft.name}
+                    onChange={(e) => setPersonaDraft((d) => ({ ...d, name: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Description
+                  <textarea
+                    rows={5}
+                    value={personaDraft.description}
+                    onChange={(e) => setPersonaDraft((d) => ({ ...d, description: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Personality
+                  <textarea
+                    rows={3}
+                    value={personaDraft.personality}
+                    onChange={(e) => setPersonaDraft((d) => ({ ...d, personality: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Scenario
+                  <textarea
+                    rows={3}
+                    value={personaDraft.scenario}
+                    onChange={(e) => setPersonaDraft((d) => ({ ...d, scenario: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  First message
+                  <textarea
+                    rows={4}
+                    value={personaDraft.opener}
+                    onChange={(e) => setPersonaDraft((d) => ({ ...d, opener: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Alternate greetings（用 --- 分隔）
+                  <textarea
+                    rows={4}
+                    value={personaDraft.alternate_greetings}
+                    onChange={(e) =>
+                      setPersonaDraft((d) => ({ ...d, alternate_greetings: e.target.value }))
+                    }
+                  />
+                </label>
+                <label>
+                  System prompt（可空，空则用 description 等拼装）
+                  <textarea
+                    rows={4}
+                    value={personaDraft.system_prompt}
+                    onChange={(e) => setPersonaDraft((d) => ({ ...d, system_prompt: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Post-history instructions
+                  <textarea
+                    rows={2}
+                    value={personaDraft.post_history_instructions}
+                    onChange={(e) =>
+                      setPersonaDraft((d) => ({
+                        ...d,
+                        post_history_instructions: e.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                {loreEntries.length > 0 && (
+                  <div className="lore-preview">
+                    <p className="sub">Character book（{loreEntries.length} 条，导入后可只读浏览）</p>
+                    <ul>
+                      {loreEntries.slice(0, 20).map((entry, i) => {
+                        const keys = Array.isArray(entry.keys)
+                          ? (entry.keys as string[]).join(", ")
+                          : "";
+                        const content = String(entry.content || "");
+                        const constant = !!entry.constant;
+                        return (
+                          <li key={i}>
+                            <strong>{constant ? "常驻" : keys || "(无 key)"}</strong>
+                            <span>{content.slice(0, 120)}{content.length > 120 ? "…" : ""}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )}
+                {personaEditId && !personaReadonly && (
+                  <label className="btn ghost file-btn">
+                    上传头像
+                    <input
+                      type="file"
+                      accept="image/*"
+                      hidden
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = "";
+                        if (!f || !personaEditId) return;
+                        void api
+                          .uploadPersonaAvatar(personaEditId, f)
+                          .then(async () => {
+                            await loadPersonas();
+                            setPersonaMsg("头像已更新");
+                          })
+                          .catch((err) => setPersonaMsg(String(err)));
+                      }}
+                    />
+                  </label>
+                )}
+                <div className="row">
+                  <button type="button" onClick={() => void savePersonaDraft()}>
+                    {personaReadonly ? "另存为新人格" : "保存人格"}
+                  </button>
+                  {personaEditId && !personaReadonly && (
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      onClick={() => {
+                        if (!personaEditId) return;
+                        if (!window.confirm("删除该人格？")) return;
+                        void api
+                          .deletePersona(personaEditId)
+                          .then(async () => {
+                            startNewPersonaDraft();
+                            await loadPersonas();
+                            setPersonaMsg("已删除");
+                          })
+                          .catch((err) => setPersonaMsg(String(err)));
+                      }}
+                    >
+                      删除
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>

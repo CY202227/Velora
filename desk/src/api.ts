@@ -21,6 +21,7 @@ export type Session = {
   tts_enabled: boolean;
   style_knobs?: Record<string, unknown>;
   warmth: number;
+  greeting_index?: number;
   created_at: string;
   updated_at: string;
 };
@@ -65,6 +66,7 @@ export type Settings = {
   tts_enabled: boolean;
   show_memory_hints: boolean;
   default_warmth: number;
+  default_persona_id?: string;
   user_timezone: string;
   quiet_hours_enabled: boolean;
   quiet_hours_start: string;
@@ -84,6 +86,42 @@ export type Settings = {
   local_llm_base_url?: string;
   local_llm_model?: string;
   start_local_llm_sidecar?: boolean;
+};
+
+export type Persona = {
+  id: string;
+  name: string;
+  system_prompt: string;
+  opener?: string | null;
+  begin_dialogs: string[];
+  style_defaults: Record<string, unknown>;
+  source: string;
+  description: string;
+  personality: string;
+  scenario: string;
+  post_history_instructions: string;
+  alternate_greetings: string[];
+  greetings: string[];
+  character_book?: Record<string, unknown> | null;
+  avatar_url?: string | null;
+  has_avatar: boolean;
+  import_meta?: Record<string, unknown> | null;
+  readonly?: boolean;
+};
+
+export type PersonaWrite = {
+  name: string;
+  description?: string;
+  personality?: string;
+  scenario?: string;
+  system_prompt?: string | null;
+  opener?: string | null;
+  begin_dialogs?: string[];
+  mes_example?: string | null;
+  post_history_instructions?: string;
+  alternate_greetings?: string[];
+  character_book?: Record<string, unknown> | null;
+  avatar_url?: string | null;
 };
 
 export type LocalLlmStatus = {
@@ -242,12 +280,51 @@ export function browserTimezone(): string {
 }
 
 export const api = {
-  createSession: (body?: { warmth?: number }) =>
+  createSession: (body?: { warmth?: number; persona_id?: string }) =>
     json<Session>("/api/sessions", { method: "POST", body: JSON.stringify(body || {}) }),
   listSessions: () => json<Session[]>("/api/sessions"),
   listTurns: (id: string) => json<Turn[]>(`/api/sessions/${id}/turns`),
-  patchSession: (id: string, body: { warmth?: number; tts_enabled?: boolean; model?: string }) =>
-    json<Session>(`/api/sessions/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  patchSession: (
+    id: string,
+    body: {
+      warmth?: number;
+      tts_enabled?: boolean;
+      model?: string;
+      persona_id?: string;
+      greeting_index?: number;
+    },
+  ) => json<Session>(`/api/sessions/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  listPersonas: () => json<Persona[]>("/api/personas"),
+  getPersona: (id: string) => json<Persona>(`/api/personas/${encodeURIComponent(id)}`),
+  createPersona: (body: PersonaWrite) =>
+    json<Persona>("/api/personas", { method: "POST", body: JSON.stringify(body) }),
+  updatePersona: (id: string, body: PersonaWrite) =>
+    json<Persona>(`/api/personas/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deletePersona: (id: string) =>
+    json<{ status: string }>(`/api/personas/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  importPersonaJson: (card: unknown) =>
+    json<Persona>("/api/personas/import", { method: "POST", body: JSON.stringify(card) }),
+  importPersonaFile: async (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/personas/import", { method: "POST", body: fd });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json() as Promise<Persona>;
+  },
+  uploadPersonaAvatar: async (id: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(`/api/personas/${encodeURIComponent(id)}/avatar`, {
+      method: "POST",
+      body: fd,
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json() as Promise<Persona>;
+  },
+  personaAvatarUrl: (id: string) => `/api/personas/${encodeURIComponent(id)}/avatar`,
   getSettings: () => json<Settings>("/api/settings"),
   getLocalLlmStatus: () => json<LocalLlmStatus>("/api/local-llm/status"),
   enableLocalLlm: () =>
@@ -268,6 +345,7 @@ export const api = {
       show_memory_hints: boolean;
       atom_memory_base_url: string;
       default_warmth: number;
+      default_persona_id: string;
       user_timezone: string;
       quiet_hours_enabled: boolean;
       quiet_hours_start: string;
