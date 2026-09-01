@@ -48,6 +48,15 @@ function visibleChatMsg(m: Msg): boolean {
   return true;
 }
 
+/** Display-only: split one turn into visual beats. Storage stays a single message. */
+function displayParagraphs(text: string): string[] {
+  const parts = text
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  return parts.length > 1 ? parts : text ? [text] : [];
+}
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -873,6 +882,61 @@ export default function App() {
                       .filter(visibleChatMsg)
                       .map((m, i) => {
                         const timeLabel = formatMsgTime(m.created_at, tz);
+                        const segs =
+                          m.role === "assistant" && !m.streaming
+                            ? displayParagraphs(m.content || "")
+                            : [];
+                        const useSegs = segs.length > 1;
+                        if (useSegs) {
+                          return (
+                            <div key={m.id || i} className="bubble-group">
+                              {isReminderMsg(m) && <span className="tag-reminder">提醒</span>}
+                              {segs.map((seg, si) => (
+                                <div
+                                  key={`${m.id || i}-${si}`}
+                                  className={`bubble assistant seg${isReminderMsg(m) ? " reminder" : ""}`}
+                                >
+                                  {seg}
+                                </div>
+                              ))}
+                              {!!m.attachments?.length && session && (
+                                <div className="attach-list">
+                                  {m.attachments.map((a) => {
+                                    const href = api.workspaceFileUrl(session.id, a.path);
+                                    if (a.kind === "image") {
+                                      return (
+                                        <a
+                                          key={a.path}
+                                          className="attach-card image"
+                                          href={href}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                        >
+                                          <img src={href} alt={a.name} />
+                                          <span>
+                                            {a.name} · {formatBytes(a.bytes)}
+                                          </span>
+                                        </a>
+                                      );
+                                    }
+                                    return (
+                                      <a
+                                        key={a.path}
+                                        className="attach-card"
+                                        href={href}
+                                        download={a.name}
+                                      >
+                                        <strong>{a.name}</strong>
+                                        <span>{formatBytes(a.bytes)}</span>
+                                      </a>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                              {timeLabel && <time className="bubble-time">{timeLabel}</time>}
+                            </div>
+                          );
+                        }
                         return (
                         <div
                           key={m.id || i}

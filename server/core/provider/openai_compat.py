@@ -15,9 +15,71 @@ from server.core.local_llm.manifest import (
     DEFAULT_TOP_P,
 )
 from server.core.local_llm.think import ThinkStreamFilter, strip_think
-from server.core.provider.base import ChatResult, ToolCall
+from server.core.provider.base import ChatResult, StreamEvent, ToolCall
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_tool_calls(raw_calls: Any) -> list[ToolCall]:
+    tool_calls: list[ToolCall] = []
+    if not isinstance(raw_calls, list):
+        return tool_calls
+    for tc in raw_calls:
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function") or {}
+        name = fn.get("name") or ""
+        args = fn.get("arguments")
+        if args is None:
+            args = "{}"
+        elif not isinstance(args, str):
+            args = json.dumps(args, ensure_ascii=False)
+        tool_calls.append(
+            ToolCall(
+                id=str(tc.get("id") or f"call_{len(tool_calls)}"),
+                name=str(name),
+                arguments=args,
+            )
+        )
+    return tool_calls
+
+
+def _merge_tool_call_delta(
+    acc: dict[int, dict[str, Any]],
+    deltas: Any,
+) -> None:
+    """Accumulate OpenAI-style streaming tool_calls deltas by index."""
+    if not isinstance(deltas, list):
+        return
+    for i, tc in enumerate(deltas):
+        if not isinstance(tc, dict):
+            continue
+        idx_raw = tc.get("index")
+        try:
+            idx = int(idx_raw) if idx_raw is not None else i
+        except (TypeError, ValueError):
+            idx = i
+        slot = acc.setdefault(
+            idx,
+            {
+                "id": "",
+                "type": "function",
+                "function": {"name": "", "arguments": ""},
+            },
+        )
+        if tc.get("id"):
+            slot["id"] = str(tc["id"])
+        if tc.get("type"):
+            slot["type"] = str(tc["type"])
+        fn = tc.get("function")
+        if isinstance(fn, dict):
+            if fn.get("name"):
+                slot["function"]["name"] = str(fn["name"])
+            args = fn.get("arguments")
+            if args is not None:
+                slot["function"]["arguments"] = (
+                    str(slot["function"].get("arguments") or "") + str(args)
+                )
 
 
 class OpenAICompatProvider:
@@ -101,33 +163,24 @@ class OpenAICompatProvider:
         if content is not None and not isinstance(content, str):
             content = str(content)
         content = self._clean(content)
-        raw_calls = message.get("tool_calls") or []
-        tool_calls: list[ToolCall] = []
-        for tc in raw_calls:
-            if not isinstance(tc, dict):
-                continue
-            fn = tc.get("function") or {}
-            name = fn.get("name") or ""
-            args = fn.get("arguments")
-            if args is None:
-                args = "{}"
-            elif not isinstance(args, str):
-                args = json.dumps(args, ensure_ascii=False)
-            tool_calls.append(
-                ToolCall(
-                    id=str(tc.get("id") or f"call_{len(tool_calls)}"),
-                    name=str(name),
-                    arguments=args,
-                )
-            )
-        return ChatResult(content=content, tool_calls=tool_calls)
+        return ChatResult(
+            content=content,
+            tool_calls=_parse_tool_calls(message.get("tool_calls")),
+        )
 
-    async def stream(
+    async def stream_chat(
         self,
         messages: list[dict[str, Any]],
         *,
         model: str,
-    ) -> AsyncIterator[str]:
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        """Stream one chat/completions request; emit deltas then a final ChatResult.
+
+        Tools (if any) are attached to this same request — AstrBot-style — so a
+        plain reply never needs a second generation pass.
+        """
         url = f"{self.base_url}/chat/completions"
         payload: dict[str, Any] = {
             "model": model,
@@ -135,7 +188,14 @@ class OpenAICompatProvider:
             "stream": True,
         }
         self._maybe_sampling(payload)
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice if tool_choice is not None else "auto"
+
         filt = ThinkStreamFilter() if self.strip_think_blocks else None
+        content_parts: list[str] = []
+        tool_acc: dict[int, dict[str, Any]] = {}
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             async with client.stream(
                 "POST",
@@ -164,16 +224,43 @@ class OpenAICompatProvider:
                     if not choices:
                         continue
                     delta = choices[0].get("delta") or {}
+                    if not isinstance(delta, dict):
+                        continue
+                    _merge_tool_call_delta(tool_acc, delta.get("tool_calls"))
                     content = delta.get("content")
                     if not content:
                         continue
                     if filt is None:
-                        yield content
+                        content_parts.append(content)
+                        yield StreamEvent(delta=content)
                     else:
                         piece = filt.feed(content)
                         if piece:
-                            yield piece
+                            content_parts.append(piece)
+                            yield StreamEvent(delta=piece)
                 if filt is not None:
                     tail = filt.flush()
                     if tail:
-                        yield tail
+                        content_parts.append(tail)
+                        yield StreamEvent(delta=tail)
+
+        raw_calls = [tool_acc[i] for i in sorted(tool_acc)]
+        content = "".join(content_parts) if content_parts else None
+        if content is not None:
+            content = self._clean(content)
+        yield StreamEvent(
+            final=ChatResult(
+                content=content,
+                tool_calls=_parse_tool_calls(raw_calls),
+            )
+        )
+
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+    ) -> AsyncIterator[str]:
+        async for event in self.stream_chat(messages, model=model):
+            if event.delta:
+                yield event.delta

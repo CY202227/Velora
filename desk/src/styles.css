@@ -285,6 +285,30 @@ body {
   animation: bubble-in 260ms ease-out;
 }
 
+.bubble-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-width: 92%;
+  align-self: flex-start;
+  animation: bubble-in 260ms ease-out;
+}
+
+.bubble-group .bubble {
+  max-width: 100%;
+  animation: none;
+}
+
+.bubble-group .bubble.seg {
+  padding: 0.7rem 0.95rem;
+}
+
+.bubble-group .bubble-time {
+  align-self: flex-start;
+  margin-top: 0.15rem;
+  padding-left: 0.15rem;
+}
+
 @keyframes bubble-in {
   from {
     opacity: 0;
