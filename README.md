@@ -3,6 +3,8 @@
 Personal LLM chat desk: cloud (OpenAI-compatible) and an optional **builtin local** model (self-managed GGUF + `llama-server`), optional external TTS, lasting memory via a separate HTTP memory service.  
 Builtin function calling (reminders / time / memory summary) plus optional MCP clients via `velora_data/mcp_server.json`. Not an IM bot framework.
 
+> **Local tool safety:** Shell, Python, and workspace file tools are disabled by default because they currently run with the OS permissions of the person starting Velora. Enable them only for trusted local use (`VELORA_COMPUTER_ENABLED=true` or Desk → 设置), until the dedicated sandbox is in place.
+
 ## Layout
 
 ```text

@@ -78,8 +78,9 @@ class Settings(BaseSettings):
     mcp_enabled: bool = True
     mcp_config_path: str = f"{(_DATA / 'mcp_server.json').as_posix()}"
 
-    # local computer use (session workspace)
-    computer_enabled: bool = True
+    # Local computer use is powerful and not sandboxed yet. It must be enabled
+    # explicitly by the person running Velora.
+    computer_enabled: bool = False
     computer_shell: str = "powershell"  # powershell | cmd | bash
     computer_timeout_seconds: int = 60
     computer_allow_abs_paths: bool = False

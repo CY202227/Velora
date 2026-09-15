@@ -1573,10 +1573,13 @@ export default function App() {
                   <input
                     name="computer_enabled"
                     type="checkbox"
-                    defaultChecked={settings.computer_enabled !== false}
+                    defaultChecked={settings.computer_enabled === true}
                   />
                   启用本机工具（Shell / Python / 文件）
                 </label>
+                <p className="sub">
+                  本机工具会以运行 Velora 的 Windows 用户权限执行，尚未接入专属沙箱；仅在可信本地对话中手动开启。
+                </p>
                 <label className="chk-inline">
                   <input
                     name="web_search_enabled"

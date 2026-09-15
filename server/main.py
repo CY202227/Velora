@@ -70,7 +70,8 @@ async def lifespan(app: FastAPI):
         state.settings.port,
         state.settings.llm_base_url,
         state.settings.llm_model,
-        bool(state.memory_sidecar and state.memory_sidecar.started_by_us),
+        bool(
+            state.memory_sidecar and state.memory_sidecar.started_by_us),
         bool(
             state.local_llm
             and state.local_llm.sidecar
