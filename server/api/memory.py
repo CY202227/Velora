@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -12,6 +13,7 @@ router = APIRouter(prefix="/api/memory", tags=["memory"])
 
 class CorrectionBody(BaseModel):
     text: str = Field(min_length=1)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class ArchiveKindBody(BaseModel):
@@ -123,14 +125,19 @@ async def archive_atom(key: str, request: Request) -> dict[str, Any]:
 async def post_correction(body: CorrectionBody, request: Request) -> dict[str, Any]:
     state = request.app.state.velora
     uid = state.settings.memory_space_uid
+    delivery_key = body.idempotency_key or str(uuid.uuid4())
     written = await state.memory.add_source(
         uid,
         kind="correction",
         content=body.text,
         salience=0.9,
         external_ref={"system": "velora", "via": "memory_panel"},
+        idempotency_key=delivery_key,
     )
     if written is None:
+        if state.memory.delivery_store is not None:
+            return {"ok": False, "source": None, "consolidated": False,
+                    "status": "queued", "idempotency_key": delivery_key}
         raise HTTPException(502, "failed to write correction source")
     consolidated = await state.consolidate_job.run_now(uid, trigger="correction", source_id=written["id"])
     return {"ok": consolidated, "source": written, "consolidated": consolidated,

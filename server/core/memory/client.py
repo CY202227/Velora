@@ -305,20 +305,35 @@ class AtomMemoryClient:
             return None
 
 
-    async def retry_deliveries(self) -> None:
+    async def retry_deliveries(self, consolidate_job=None) -> None:
         if self.delivery_store is None:
             return
+        groups: dict[str, list[tuple[str, dict, dict]]] = {}
         for key, uid, payload in await self.delivery_store.pending_memory_deliveries():
-            await self.delivery_store.touch_memory_delivery(key)
-            source = await self._send_source(uid, payload)
-            if source is None:
-                continue
-            # Query durable state first: a lost response must not repeat consolidation.
-            if source.get("status") in ("consolidated", "skipped"):
-                await self.delivery_store.finish_memory_delivery(key)
-                continue
-            result = await self.consolidate(uid, trigger="correction" if payload["kind"] == "correction" else "scheduled")
-            if result and result.get("status") == "succeeded":
-                current = await self.get_source(uid, source["id"])
-                if current and current.get("status") in ("consolidated", "skipped"):
+            try:
+                await self.delivery_store.touch_memory_delivery(key)
+                source = await self._send_source(uid, payload)
+                if source is None:
+                    continue
+                if source.get("status") in ("consolidated", "skipped"):
                     await self.delivery_store.finish_memory_delivery(key)
+                    continue
+                groups.setdefault(uid, []).append((key, payload, source))
+            except Exception:
+                logger.exception("memory delivery failed for %s", key)
+        for uid, items in groups.items():
+            try:
+                trigger = "correction" if any(p["kind"] == "correction" for _, p, _ in items) else "scheduled"
+                if consolidate_job is not None:
+                    succeeded = await consolidate_job.run_now(uid, trigger=trigger)
+                else:
+                    result = await self.consolidate(uid, trigger=trigger)
+                    succeeded = bool(result and result.get("status") == "succeeded")
+                if not succeeded:
+                    continue
+                for key, _, source in items:
+                    current = await self.get_source(uid, source["id"])
+                    if current and current.get("status") in ("consolidated", "skipped"):
+                        await self.delivery_store.finish_memory_delivery(key)
+            except Exception:
+                logger.exception("memory delivery consolidation failed for %s", uid)

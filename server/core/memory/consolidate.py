@@ -85,7 +85,7 @@ class ConsolidateJob:
     async def _retry(self) -> None:
         while True:
             try:
-                await self.client.retry_deliveries()
+                await self.client.retry_deliveries(self)
             except Exception:
                 logger.exception("memory delivery retry failed")
             await asyncio.sleep(30)
