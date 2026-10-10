@@ -297,11 +297,47 @@ class AtomMemoryClient:
     async def get_source(self, uid: str, source_id: int) -> dict[str, Any] | None:
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(f"{self.base_url}/spaces/{uid}/sources/{source_id}", headers=self._headers())
+                # atom-memory exposes the source collection but not a
+                # single-source endpoint. Filter locally so delivery retry
+                # remains compatible with the HTTP contract.
+                response = await client.get(
+                    f"{self.base_url}/spaces/{uid}/sources",
+                    headers=self._headers(),
+                )
                 response.raise_for_status()
-                return response.json()
+                return next(
+                    (
+                        source
+                        for source in response.json()
+                        if source.get("id") == source_id
+                    ),
+                    None,
+                )
         except Exception:
             logger.exception("atom-memory source status failed")
+            return None
+
+    async def find_source_by_external_ref(
+        self, uid: str, external_ref: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Find a previously delivered source without requiring a new API endpoint."""
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.base_url}/spaces/{uid}/sources",
+                    headers=self._headers(),
+                )
+                response.raise_for_status()
+                return next(
+                    (
+                        source
+                        for source in response.json()
+                        if source.get("external_ref") == external_ref
+                    ),
+                    None,
+                )
+        except Exception:
+            logger.exception("atom-memory source lookup failed")
             return None
 
 
@@ -312,7 +348,13 @@ class AtomMemoryClient:
         for key, uid, payload in await self.delivery_store.pending_memory_deliveries():
             try:
                 await self.delivery_store.touch_memory_delivery(key)
-                source = await self._send_source(uid, payload)
+                external_ref = payload.get("external_ref")
+                source = (
+                    await self.find_source_by_external_ref(uid, external_ref)
+                    if isinstance(external_ref, dict)
+                    else None
+                )
+                source = source or await self._send_source(uid, payload)
                 if source is None:
                     continue
                 if source.get("status") in ("consolidated", "skipped"):
