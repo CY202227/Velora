@@ -113,3 +113,76 @@ async def test_retries_consolidate_each_space_once(tmp_path):
     job.run_now.assert_awaited_once_with("space", trigger="scheduled")
     assert await store.pending_memory_deliveries() == []
     await store.close()
+
+
+@pytest.mark.asyncio
+async def test_http_correction_failure_restart_retry_and_recall(tmp_path, monkeypatch):
+    # Optional cross-repository test; normal Velora-only installs may omit memory.
+    pytest.importorskip("atom_memory")
+    import json
+    import re
+    import httpx
+    from sqlmodel import SQLModel, Session, create_engine
+    from sqlalchemy.pool import StaticPool
+    from atom_memory.main import app as memory_app
+    from atom_memory.api.deps import get_llm, require_api_key
+    from atom_memory.db import get_session
+    from atom_memory.llm.base import ChatResult, LLMError
+    from server.core.chain.context import TurnContext
+    from server.core.chain.types import TurnRequest
+    from server.core.nodes.persist_turn import PersistTurnNode
+
+    class LLM:
+        fail = True
+        def complete(self, system, user, response_format=None):
+            if self.fail:
+                raise LLMError("temporary model outage")
+            ids = [int(v) for v in re.findall(r"source_id=(\d+)", user)]
+            return ChatResult(text=json.dumps({"operations": [{
+                "op": "upsert", "kind": "person", "key": "user-preferred-name",
+                "statement": "用户希望被称为小周", "detail": "明确纠正了称呼", "source_ids": ids,
+            }]}), prompt_tokens=1, completion_tokens=1)
+
+    llm = LLM()
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    SQLModel.metadata.create_all(engine)
+    def sessions():
+        with Session(engine) as session:
+            yield session
+    old_overrides = dict(memory_app.dependency_overrides)
+    memory_app.dependency_overrides[get_session] = sessions
+    memory_app.dependency_overrides[get_llm] = lambda: llm
+    memory_app.dependency_overrides[require_api_key] = lambda: None
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original_client(
+        transport=httpx.ASGITransport(app=memory_app), **kwargs))
+    url = f"sqlite+aiosqlite:///{(tmp_path / 'http-delivery.db').as_posix()}"
+    store = ConversationStore(url)
+    await store.init()
+    try:
+        session = await store.create_session(persona_id="test", memory_space_uid="http-space", model="fake")
+        client = AtomMemoryClient("http://memory", delivery_store=store)
+        ctx = TurnContext(request=TurnRequest(session.id, "以后请叫我小周"), session_id=session.id,
+                          memory_space_uid="http-space", assistant_text="好的", is_correction=True)
+        await PersistTurnNode(store, client, ConsolidateJob(client)).process(ctx)
+        assert ctx.memory_wrote is True
+        assert ctx.consolidated is False
+        assert len(await store.pending_memory_deliveries()) == 1
+        await store.close()
+        store = ConversationStore(url)
+        await store.init()
+        client = AtomMemoryClient("http://memory", delivery_store=store)
+        llm.fail = False
+        await client.retry_deliveries(ConsolidateJob(client))
+        assert await store.pending_memory_deliveries() == []
+        result = await client.recall("http-space", "我叫什么", method="bm25")
+        assert "小周" in result["context_block"]
+        async with original_client(transport=httpx.ASGITransport(app=memory_app)) as http:
+            response = await http.get("http://memory/spaces/http-space/sources")
+            assert len(response.json()) == 1
+            assert response.json()[0]["status"] == "consolidated"
+    finally:
+        await store.close()
+        memory_app.dependency_overrides.clear()
+        memory_app.dependency_overrides.update(old_overrides)
+        engine.dispose()
