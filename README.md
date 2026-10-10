@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/CY202227/Velora/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/CY202227/Velora/actions/workflows/ci.yml)
 
+简体中文 | [English](README.en.md) | [日本語](README.ja.md)
+
 一个会记得你、只在值得时出现的个人 AI。Velora 是带长期记忆的个人 LLM Chat Desk：支持 OpenAI-compatible 云模型和可选的**内置本地**模型（自管 GGUF + `llama-server`），以及独立运行的 atom-memory 记忆服务。
 内置函数调用（提醒 / 时间 / 记忆摘要）与可选 MCP 客户端（`velora_data/mcp_server.json`）。它不是 IM 机器人框架。
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from sqlalchemy import (
@@ -520,6 +520,53 @@ class ConversationStore:
             await db.refresh(turn)
             return _turn_row(turn)
 
+    async def save_exchange(
+        self,
+        session_id: str,
+        user_text: str | None,
+        assistant_text: str,
+        *,
+        source: str = "chat",
+        attachments: list[dict] | None = None,
+        memory_uid: str | None = None,
+        memory_payload: dict | None = None,
+    ) -> tuple[TurnRow, dict | None]:
+        """Commit the complete exchange and its memory delivery together."""
+        now = _utcnow()
+        user_id = str(uuid.uuid4()) if user_text is not None else None
+        assistant_id = str(uuid.uuid4())
+        payload = None
+        if memory_payload is not None:
+            if memory_uid is None:
+                raise ValueError("memory_uid is required for delivery")
+            payload = dict(memory_payload)
+            payload["idempotency_key"] = assistant_id
+            payload["external_ref"] = {
+                "system": "velora", "session_id": session_id,
+                "turn_id": user_id if payload["kind"] == "correction" and user_id else assistant_id,
+            }
+        assistant = TurnModel(
+            id=assistant_id, session_id=session_id, role="assistant",
+            content=assistant_text, created_at=now + timedelta(microseconds=1), source=source,
+            attachments=json.dumps(attachments or [], ensure_ascii=False),
+        )
+        async with self._session_factory() as db:
+            if user_id is not None:
+                db.add(TurnModel(id=user_id, session_id=session_id, role="user",
+                                 content=user_text, created_at=now, source=source, attachments="[]"))
+                # Preserve user-before-assistant insertion order on equal timestamps.
+                await db.flush()
+            db.add(assistant)
+            if payload is not None:
+                db.add(MemoryDeliveryModel(id=assistant_id, space_uid=memory_uid,
+                                           payload=json.dumps(payload, ensure_ascii=False)))
+            session = await db.get(SessionModel, session_id)
+            if session is None:
+                raise ValueError("session not found")
+            session.updated_at = now
+            await db.commit()
+            return _turn_row(assistant), payload
+
     async def list_turns(
         self, session_id: str, *, limit: int = 40
     ) -> list[TurnRow]:
@@ -824,9 +871,13 @@ class ConversationStore:
 
     async def save_memory_delivery(self, key: str, uid: str, payload: dict) -> None:
         async with self._session_factory() as db:
-            if await db.get(MemoryDeliveryModel, key) is None:
-                db.add(MemoryDeliveryModel(id=key, space_uid=uid, payload=json.dumps(payload, ensure_ascii=False)))
-                await db.commit()
+            previous = await db.get(MemoryDeliveryModel, key)
+            if previous is not None:
+                if previous.space_uid != uid or json.loads(previous.payload) != payload:
+                    raise ValueError("delivery key reused with a different payload")
+                return
+            db.add(MemoryDeliveryModel(id=key, space_uid=uid, payload=json.dumps(payload, ensure_ascii=False)))
+            await db.commit()
 
     async def pending_memory_deliveries(self, limit: int = 20) -> list[tuple[str, str, dict]]:
         async with self._session_factory() as db:

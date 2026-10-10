@@ -56,30 +56,24 @@ class PersistTurnNode:
                     logger.exception("attachment diff failed")
                     attachments = []
 
-        user_turn = None
-        if not proactive:
-            # Proactive wakes are outbound: do not persist a fake "user" bubble.
-            user_turn = await self.store.add_turn(
-                ctx.session_id,
-                "user",
-                ctx.request.user_text,
-                source=source,
-            )
-        asst_turn = await self.store.add_turn(
-            ctx.session_id,
-            "assistant",
-            ctx.assistant_text,
-            source=source,
-            attachments=attachments,
+        decision = decide_memory_write(
+            ctx.request.user_text, is_correction=ctx.is_correction, proactive=proactive,
+        )
+        payload = None
+        if decision.write:
+            payload = {
+                "kind": "correction" if ctx.is_correction else "turn",
+                "content": ctx.request.user_text if ctx.is_correction else
+                    f"用户：{ctx.request.user_text}\nAI：{ctx.assistant_text}",
+                "salience": 0.9 if ctx.is_correction else 0.2,
+            }
+        asst_turn, payload = await self.store.save_exchange(
+            ctx.session_id, None if proactive else ctx.request.user_text,
+            ctx.assistant_text, source=source, attachments=attachments,
+            memory_uid=ctx.memory_space_uid, memory_payload=payload,
         )
         ctx.turn_id = asst_turn.id
         ctx.extras["attachments"] = attachments
-
-        decision = decide_memory_write(
-            ctx.request.user_text,
-            is_correction=ctx.is_correction,
-            proactive=proactive,
-        )
         if not decision.write:
             await ctx.publish(
                 "persisted",
@@ -93,47 +87,17 @@ class PersistTurnNode:
             )
             return NodeResult.CONTINUE
 
-        if proactive:
-            content = f"提醒：{ctx.assistant_text}"
-        else:
-            content = f"用户：{ctx.request.user_text}\nAI：{ctx.assistant_text}"
-        if ctx.is_correction:
-            written = await self.memory.add_source(
-                ctx.memory_space_uid,
-                kind="correction",
-                content=ctx.request.user_text,
-                salience=0.9,
-                external_ref={
-                    "system": "velora",
-                    "session_id": ctx.session_id,
-                    "turn_id": (user_turn.id if user_turn else asst_turn.id),
-                },
-            )
-            if written is not None:
-                ctx.memory_wrote = True
+        written = await self.memory.add_source(ctx.memory_space_uid, **payload)
+        ctx.memory_wrote = written is not None
+        if written is not None:
+            if ctx.is_correction:
                 ctx.consolidated = await self.consolidate_job.run_now(
-                    ctx.memory_space_uid, trigger="correction", source_id=written["id"]
+                    ctx.memory_space_uid, trigger="correction", source_id=written["id"],
                 )
-        else:
-            written = await self.memory.add_source(
-                ctx.memory_space_uid,
-                kind="turn",
-                content=content,
-                salience=0.2,
-                external_ref={
-                    "system": "velora",
-                    "session_id": ctx.session_id,
-                    "turn_id": asst_turn.id,
-                },
-            )
-            if written is not None:
-                ctx.memory_wrote = True
+            else:
                 count = await self.store.count_turns(ctx.session_id)
-                # count includes user+assistant; every N assistant turns ≈ 2N rows
                 if self.consolidate_every_n > 0 and (count // 2) % self.consolidate_every_n == 0:
-                    await self.consolidate_job.enqueue(
-                        ctx.memory_space_uid, trigger="scheduled"
-                    )
+                    await self.consolidate_job.enqueue(ctx.memory_space_uid, trigger="scheduled")
 
         await ctx.publish(
             "persisted",
@@ -142,6 +106,7 @@ class PersistTurnNode:
                 "memory_wrote": ctx.memory_wrote,
                 "consolidated": ctx.consolidated,
                 "memory_write_reason": decision.reason,
+                "memory_queued": not ctx.consolidated,
                 "attachments": attachments,
             },
         )

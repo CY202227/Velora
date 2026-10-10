@@ -385,7 +385,7 @@ export const api = {
       body: JSON.stringify({ kind }),
     }),
   postCorrection: (text: string) =>
-    json("/api/memory/corrections", { method: "POST", body: JSON.stringify({ text }) }),
+    json<{ ok: boolean; status: "queued" | "pending" | "consolidated" }>("/api/memory/corrections", { method: "POST", body: JSON.stringify({ text }) }),
   consolidate: () => json("/api/memory/consolidate", { method: "POST" }),
   debugStatus: () => json<DebugStatus>("/api/debug/status"),
   mcpStatus: () => json<McpStatus>("/api/mcp/status"),
