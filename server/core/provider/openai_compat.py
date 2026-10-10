@@ -178,7 +178,7 @@ class OpenAICompatProvider:
     ) -> AsyncIterator[StreamEvent]:
         """Stream one chat/completions request; emit deltas then a final ChatResult.
 
-        Tools (if any) are attached to this same request — AstrBot-style — so a
+        Tools (if any) are attached to this same request, so a
         plain reply never needs a second generation pass.
         """
         url = f"{self.base_url}/chat/completions"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -42,6 +43,10 @@ class Settings(BaseSettings):
 
     # conversation
     history_max_messages: int = 40
+    # Keep the newest turns verbatim; compact older in-window turns into a
+    # bounded, non-durable transcript excerpt for the current request.
+    history_recent_messages: int = 16
+    history_compaction_chars: int = 1600
     tts_enabled: bool = False
     # Show per-turn memory recall/write hints in Desk
     show_memory_hints: bool = True
@@ -74,7 +79,7 @@ class Settings(BaseSettings):
     # function calling / builtin tools
     max_tool_rounds: int = 4
 
-    # MCP clients (AstrBot-compatible mcp_server.json)
+    # MCP clients (JSON configuration with stdio, SSE, or streamable HTTP servers)
     mcp_enabled: bool = True
     mcp_config_path: str = f"{(_DATA / 'mcp_server.json').as_posix()}"
 
@@ -98,7 +103,9 @@ class Settings(BaseSettings):
 
 def get_settings() -> Settings:
     _DATA.mkdir(parents=True, exist_ok=True)
-    settings = Settings()
+    # Lets a clean demo use a dedicated config without replacing a developer's
+    # real .env (for example: VELORA_ENV_FILE=.env.demo).
+    settings = Settings(_env_file=os.environ.get("VELORA_ENV_FILE", ".env"))
     Path(settings.models_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.bin_dir).mkdir(parents=True, exist_ok=True)
     return settings

@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -q --basetemp=.pytest-tmp
+
+  desk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desk/package-lock.json
+      - run: npm ci
+        working-directory: desk
+      - run: npm run build
+        working-directory: desk
+      - run: git diff --exit-code -- server/static
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.docker.example .env.docker
+      - run: docker compose --env-file .env.docker up --build -d
+      - run: curl --fail --retry 12 --retry-connrefused --retry-delay 2 http://127.0.0.1:8030/health
+      - if: always()
+        run: docker compose --env-file .env.docker down --volumes --remove-orphans

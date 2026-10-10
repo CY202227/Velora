@@ -1,4 +1,4 @@
-"""Minimal WaitRegistry stub (AstrBot #1948 WAIT semantics)."""
+"""In-memory registry for turns paused by a chain node."""
 
 from __future__ import annotations
 

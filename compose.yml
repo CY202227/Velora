@@ -1,0 +1,54 @@
+x-velora-image: &velora-image
+  build:
+    context: .
+  image: velora:local
+
+services:
+  memory:
+    <<: *velora-image
+    command: ["uvicorn", "atom_memory.main:app", "--host", "0.0.0.0", "--port", "8020"]
+    environment:
+      ATOMMEM_DATABASE_URL: sqlite:////data/atom_memory.db
+      ATOMMEM_LLM_BASE_URL: ${VELORA_LLM_BASE_URL:-https://api.openai.com/v1}
+      ATOMMEM_LLM_API_KEY: ${VELORA_LLM_API_KEY:-}
+      ATOMMEM_LLM_MODEL: ${VELORA_LLM_MODEL:-gpt-4o-mini}
+      ATOMMEM_API_KEY: ${VELORA_ATOM_MEMORY_API_KEY:-}
+    volumes:
+      - memory-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8020/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  velora:
+    <<: *velora-image
+    ports:
+      - "8030:8030"
+    environment:
+      VELORA_HOST: 0.0.0.0
+      VELORA_PORT: "8030"
+      VELORA_DATABASE_URL: sqlite+aiosqlite:////data/velora.db
+      VELORA_MODELS_DIR: /data/models
+      VELORA_BIN_DIR: /data/bin
+      VELORA_WORKSPACES_DIR: /data/workspaces
+      VELORA_SKILLS_DIR: /data/skills
+      VELORA_MCP_CONFIG_PATH: /data/mcp_server.json
+      VELORA_ATOM_MEMORY_BASE_URL: http://memory:8020
+      VELORA_ATOM_MEMORY_API_KEY: ${VELORA_ATOM_MEMORY_API_KEY:-}
+      VELORA_START_MEMORY_SIDECAR: "false"
+      VELORA_COMPUTER_ENABLED: "false"
+      VELORA_WEB_SEARCH_ENABLED: "false"
+      VELORA_LLM_BASE_URL: ${VELORA_LLM_BASE_URL:-https://api.openai.com/v1}
+      VELORA_LLM_API_KEY: ${VELORA_LLM_API_KEY:-}
+      VELORA_LLM_MODEL: ${VELORA_LLM_MODEL:-gpt-4o-mini}
+    volumes:
+      - velora-data:/data
+    depends_on:
+      memory:
+        condition: service_healthy
+
+volumes:
+  memory-data:
+  velora-data:

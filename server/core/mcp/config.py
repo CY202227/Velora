@@ -1,4 +1,4 @@
-"""Parse AstrBot-compatible mcp_server.json."""
+"""Parse the local MCP server JSON configuration."""
 
 from __future__ import annotations
 

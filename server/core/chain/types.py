@@ -1,4 +1,4 @@
-"""Chain node result codes — inspired by AstrBot #1948 Chain, not onion yield."""
+"""Result codes for the sequential turn-processing chain."""
 
 from __future__ import annotations
 

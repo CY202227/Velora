@@ -8,6 +8,7 @@ from server.core.computer.attachments import diff_attachments
 from server.core.conversation.store import ConversationStore
 from server.core.memory.client import AtomMemoryClient
 from server.core.memory.consolidate import ConsolidateJob
+from server.core.memory.write_gate import decide_memory_write
 from server.core.reminders.text import finalize_reminder_reply
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,24 @@ class PersistTurnNode:
         ctx.turn_id = asst_turn.id
         ctx.extras["attachments"] = attachments
 
+        decision = decide_memory_write(
+            ctx.request.user_text,
+            is_correction=ctx.is_correction,
+            proactive=proactive,
+        )
+        if not decision.write:
+            await ctx.publish(
+                "persisted",
+                {
+                    "turn_id": ctx.turn_id,
+                    "memory_wrote": False,
+                    "consolidated": False,
+                    "memory_skipped_reason": decision.reason,
+                    "attachments": attachments,
+                },
+            )
+            return NodeResult.CONTINUE
+
         if proactive:
             content = f"提醒：{ctx.assistant_text}"
         else:
@@ -123,6 +142,7 @@ class PersistTurnNode:
                 "turn_id": ctx.turn_id,
                 "memory_wrote": ctx.memory_wrote,
                 "consolidated": ctx.consolidated,
+                "memory_write_reason": decision.reason,
                 "attachments": attachments,
             },
         )

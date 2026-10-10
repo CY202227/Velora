@@ -18,6 +18,7 @@ import {
   type SkillsList,
   type Turn,
 } from "./api";
+import { localeOptions, savedLocale, translate, type Locale } from "./i18n";
 
 type McpRow = { name: string; entry: McpServerEntry };
 
@@ -32,6 +33,12 @@ type Msg = {
   attachments?: Array<{ path: string; name: string; bytes: number; kind: string }>;
 };
 type LogItem = { id: number; t: string; title: string; payload: unknown; open?: boolean };
+type RecallItem = {
+  key: string;
+  statement: string;
+  kind: string;
+  memory_layer?: number | null;
+};
 
 let logSeq = 0;
 
@@ -63,10 +70,10 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatMsgTime(iso: string | undefined, timeZone: string): string | null {
+function formatMsgTime(iso: string | undefined, timeZone: string, locale: Locale): string | null {
   if (!iso) return null;
   try {
-    return new Date(iso).toLocaleString("zh-CN", {
+    return new Date(iso).toLocaleString(locale, {
       timeZone,
       year: "numeric",
       month: "2-digit",
@@ -106,10 +113,10 @@ function turnToMsg(t: Turn): Msg {
   };
 }
 
-function sessionLabel(s: Session, tz: string): string {
+function sessionLabel(s: Session, tz: string, locale: Locale): string {
   const stamp = s.updated_at || s.created_at;
   try {
-    return new Date(stamp).toLocaleString("zh-CN", {
+    return new Date(stamp).toLocaleString(locale, {
       timeZone: tz,
       month: "numeric",
       day: "numeric",
@@ -124,6 +131,7 @@ function sessionLabel(s: Session, tz: string): string {
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("chat");
+  const [locale, setLocale] = useState<Locale>(savedLocale);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [session, setSession] = useState<Session | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>([]);
@@ -138,6 +146,7 @@ export default function App() {
   const [status, setStatus] = useState<DebugStatus | null>(null);
   const [warmth, setWarmth] = useState(35);
   const [memHint, setMemHint] = useState<string | null>(null);
+  const [recallItems, setRecallItems] = useState<RecallItem[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [remNote, setRemNote] = useState("");
   const [remDueLocal, setRemDueLocal] = useState("");
@@ -177,6 +186,12 @@ export default function App() {
   const lastTurnCount = useRef(0);
 
   const tz = settings?.user_timezone || "Asia/Shanghai";
+  const t = (key: string, variables?: Record<string, string | number>) => translate(locale, key, variables);
+
+  useEffect(() => {
+    localStorage.setItem("velora_locale", locale);
+    document.documentElement.lang = locale;
+  }, [locale]);
 
   function pushLog(title: string, payload: unknown, open = false) {
     const item: LogItem = {
@@ -217,6 +232,7 @@ export default function App() {
     setSession(s);
     setWarmth(s.warmth ?? 35);
     setMemHint(null);
+    setRecallItems([]);
     const gIdx = s.greeting_index ?? 0;
     setGreetingIndex(gIdx);
     const turns = await api.listTurns(s.id);
@@ -402,6 +418,7 @@ export default function App() {
     setBusy(true);
     setError(null);
     setMemHint(null);
+    setRecallItems([]);
     pushLog("user_message", { text }, false);
     const sentAt = new Date().toISOString();
     setMsgs((m) => [
@@ -430,8 +447,31 @@ export default function App() {
         onEvent: (type, data) => {
           if (type === "token") return;
           pushLog(type, data, type === "error");
+          if (type === "assistant_draft_reset") {
+            acc = "";
+            setMsgs((m) => {
+              const copy = [...m];
+              const last = copy[copy.length - 1];
+              if (last?.role === "assistant" && last.streaming) {
+                copy[copy.length - 1] = { ...last, content: "" };
+              }
+              return copy;
+            });
+          }
           if (type === "memory_recall" && data && typeof data === "object" && "has_block" in data) {
-            if ((data as { has_block?: boolean }).has_block) hints.push("本轮用到了长期记忆");
+            const recall = data as { has_block?: boolean; items?: unknown };
+            if (recall.has_block) hints.push("本轮用到了长期记忆");
+            if (Array.isArray(recall.items)) {
+              setRecallItems(
+                recall.items.filter(
+                  (item): item is RecallItem =>
+                    !!item &&
+                    typeof item === "object" &&
+                    typeof (item as RecallItem).key === "string" &&
+                    typeof (item as RecallItem).statement === "string",
+                ),
+              );
+            }
           }
           if (type === "persisted" && data && typeof data === "object" && "memory_wrote" in data) {
             const p = data as { memory_wrote?: boolean; consolidated?: boolean };
@@ -734,31 +774,41 @@ export default function App() {
       <header className="topbar">
         <div className="topbar-brand">
           <span className="brand-name">Velora</span>
-          <span className="brand-tag">私人秘书</span>
+          <span className="brand-tag">{t("brand.tag")}</span>
         </div>
         <nav className="topbar-nav">
           <button type="button" className={tab === "chat" ? "active" : ""} onClick={() => setTab("chat")}>
-            对话
+            {t("nav.chat")}
           </button>
           <button type="button" className={tab === "memory" ? "active" : ""} onClick={() => setTab("memory")}>
-            记忆
+            {t("nav.memory")}
           </button>
           <button
             type="button"
             className={tab === "persona" ? "active" : ""}
             onClick={() => setTab("persona")}
           >
-            人格
+            {t("nav.persona")}
           </button>
           <button
             type="button"
             className={tab === "settings" ? "active" : ""}
             onClick={() => setTab("settings")}
           >
-            设置
+            {t("nav.settings")}
           </button>
         </nav>
         <div className="topbar-actions">
+          <label className="locale-picker">
+            <span className="sr-only">{t("language.label")}</span>
+            <select value={locale} onChange={(e) => setLocale(e.target.value as Locale)} aria-label={t("language.label")}>
+              {localeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
           {tab === "chat" && (
             <>
               <button
@@ -766,7 +816,7 @@ export default function App() {
                 className={`btn ghost ${scheduleOpen ? "active" : ""}`}
                 onClick={() => setScheduleOpen(true)}
               >
-                日程
+                {t("schedule")}
               </button>
               <div className="session-menu">
                 {activePersona?.has_avatar && (
@@ -779,8 +829,8 @@ export default function App() {
                 <select
                   value={session?.persona_id || ""}
                   onChange={(e) => void switchPersona(e.target.value)}
-                  aria-label="人格"
-                  title="切换人格"
+                  aria-label={t("persona")}
+                  title={t("persona.switch")}
                 >
                   {personas.map((p) => (
                     <option key={p.id} value={p.id}>
@@ -794,16 +844,16 @@ export default function App() {
                     const s = sessions.find((x) => x.id === e.target.value);
                     if (s) void selectSession(s);
                   }}
-                  aria-label="会话"
+                  aria-label={t("session")}
                 >
                   {sessions.map((s) => (
                     <option key={s.id} value={s.id}>
-                      {sessionLabel(s, tz)}
+                      {sessionLabel(s, tz, locale)}
                     </option>
                   ))}
                 </select>
                 <button type="button" className="btn ghost" onClick={() => void newSession()}>
-                  新会话
+                  {t("newSession")}
                 </button>
               </div>
               <button
@@ -811,7 +861,7 @@ export default function App() {
                 className={`btn ghost ${prefsOpen ? "active" : ""}`}
                 onClick={() => setPrefsOpen((v) => !v)}
               >
-                语气
+                {t("tone")}
               </button>
             </>
           )}
@@ -821,7 +871,7 @@ export default function App() {
       {prefsOpen && tab === "chat" && (
         <div className="prefs-bar">
           <label className="warmth-pick">
-            <span>更助理</span>
+            <span>{t("tone.assistant")}</span>
             <input
               type="range"
               min={0}
@@ -829,7 +879,7 @@ export default function App() {
               value={warmth}
               onChange={(e) => onWarmthChange(Number(e.target.value))}
             />
-            <span>更陪伴 ({warmth})</span>
+            <span>{t("tone.warm", { warmth })}</span>
           </label>
         </div>
       )}
@@ -841,18 +891,18 @@ export default function App() {
               {chatEmpty ? (
                 <div className="chat-hero">
                   <p className="hero-brand">Velora</p>
-                  <h1>{session?.persona_name || settings?.persona_name || "日常助理"}</h1>
-                  <p className="sub">同一会话接上上下文；值得留下的会记入长期记忆。</p>
+                  <h1>{session?.persona_name || settings?.persona_name || t("defaultPersona")}</h1>
+                  <p className="sub">{t("chat.subtitle")}</p>
                   {greetingCount > 1 && !!msgs.find((m) => m.source === "opener") && (
                     <div className="greeting-swipe">
                       <button type="button" className="btn ghost" onClick={() => void swipeGreeting(-1)}>
-                        上一开场
+                        {t("greeting.previous")}
                       </button>
                       <span className="sub">
-                        开场 {greetingIndex + 1}/{greetingCount}
+                        {t("greeting.count", { current: greetingIndex + 1, total: greetingCount })}
                       </span>
                       <button type="button" className="btn ghost" onClick={() => void swipeGreeting(1)}>
-                        下一开场
+                        {t("greeting.next")}
                       </button>
                     </div>
                   )}
@@ -867,13 +917,48 @@ export default function App() {
               ) : (
                 <>
                   <div className="chat-head">
-                    <h1>{session?.persona_name || settings?.persona_name || "日常助理"}</h1>
+                    <h1>{session?.persona_name || settings?.persona_name || t("defaultPersona")}</h1>
                   </div>
                   {memHint && (
                     <div className="mem-hint">
-                      <span>{memHint}</span>
+                      <div className="mem-hint-body">
+                        <span>{memHint}</span>
+                        {recallItems.length > 0 && (
+                          <div className="recall-items">
+                            <span className="recall-caption">{t("memory.recalled")}</span>
+                            {recallItems.map((item) => (
+                              <div className="recall-item" key={item.key}>
+                                <span>{item.statement}</span>
+                                <div className="recall-actions">
+                                  <button
+                                    type="button"
+                                    className="btn ghost compact"
+                                    onClick={() => {
+                                      setTab("memory");
+                                      void openAtom(item.key);
+                                    }}
+                                  >
+                                    {t("view")}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn ghost compact"
+                                    onClick={() => {
+                                      setCorrection(`关于「${item.statement}」：实际是 `);
+                                      setTab("memory");
+                                      void refreshMemory();
+                                    }}
+                                  >
+                                    {t("correct")}
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                       <button type="button" className="btn ghost" onClick={() => setMemHint(null)}>
-                        关闭
+                        {t("close")}
                       </button>
                     </div>
                   )}
@@ -881,7 +966,7 @@ export default function App() {
                     {msgs
                       .filter(visibleChatMsg)
                       .map((m, i) => {
-                        const timeLabel = formatMsgTime(m.created_at, tz);
+                        const timeLabel = formatMsgTime(m.created_at, tz, locale);
                         const segs =
                           m.role === "assistant" && !m.streaming
                             ? displayParagraphs(m.content || "")
@@ -890,7 +975,7 @@ export default function App() {
                         if (useSegs) {
                           return (
                             <div key={m.id || i} className="bubble-group">
-                              {isReminderMsg(m) && <span className="tag-reminder">提醒</span>}
+                              {isReminderMsg(m) && <span className="tag-reminder">{t("reminder")}</span>}
                               {segs.map((seg, si) => (
                                 <div
                                   key={`${m.id || i}-${si}`}
@@ -942,7 +1027,7 @@ export default function App() {
                           key={m.id || i}
                           className={`bubble ${m.role}${isReminderMsg(m) ? " reminder" : ""}`}
                         >
-                          {isReminderMsg(m) && <span className="tag-reminder">提醒</span>}
+                          {isReminderMsg(m) && <span className="tag-reminder">{t("reminder")}</span>}
                           {m.content || (m.streaming ? "…" : "")}
                           {!!m.attachments?.length && session && (
                             <div className="attach-list">
@@ -986,7 +1071,7 @@ export default function App() {
                 <textarea
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder="说点什么…（Enter 发送；「请提醒：事项 | ISO」可设提醒）"
+                  placeholder={t("composer.placeholder")}
                   rows={2}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
@@ -996,7 +1081,7 @@ export default function App() {
                   }}
                 />
                 <button type="button" disabled={busy || !input.trim()} onClick={() => void send()}>
-                  发送
+                  {t("send")}
                 </button>
               </div>
             </div>
@@ -1008,15 +1093,15 @@ export default function App() {
             <div className="persona-layout">
               <aside className="persona-rail">
                 <div className="section-head">
-                  <h1>人格</h1>
-                  <p className="sub">谁在说话。导入酒馆卡，或手写设定。</p>
+                  <h1>{t("persona.title")}</h1>
+                  <p className="sub">{t("persona.subtitle")}</p>
                 </div>
                 <div className="persona-rail-actions">
                   <button type="button" className="btn ghost" onClick={startNewPersonaDraft}>
-                    新建
+                    {t("new")}
                   </button>
                   <label className="btn ghost file-btn">
-                    导入卡
+                    {t("persona.import")}
                     <input
                       type="file"
                       accept=".json,.png,application/json,image/png"
@@ -1046,10 +1131,10 @@ export default function App() {
                       (!personaEditId && p.id === session?.persona_id);
                     const sourceLabel =
                       p.source === "builtin"
-                        ? "内置"
+                        ? t("persona.builtin")
                         : p.source === "import"
-                          ? "导入"
-                          : "自定义";
+                          ? t("persona.import")
+                          : t("persona.custom");
                     return (
                       <li key={p.id}>
                         <button
@@ -1072,9 +1157,9 @@ export default function App() {
                             <strong>{p.name}</strong>
                             <em>
                               {sourceLabel}
-                              {p.readonly ? " · 只读" : ""}
-                              {p.id === session?.persona_id ? " · 当前会话" : ""}
-                              {p.id === settings?.default_persona_id ? " · 默认" : ""}
+                              {p.readonly ? ` · ${t("persona.readonly")}` : ""}
+                              {p.id === session?.persona_id ? ` · ${t("persona.current")}` : ""}
+                              {p.id === settings?.default_persona_id ? ` · ${t("persona.default")}` : ""}
                             </em>
                           </span>
                         </button>
@@ -1087,11 +1172,11 @@ export default function App() {
               <section className="persona-editor">
                 <div className="persona-editor-head">
                   <div>
-                    <h2>{personaDraft.name.trim() || (personaEditId ? "编辑人格" : "新建人格")}</h2>
+                    <h2>{personaDraft.name.trim() || (personaEditId ? t("persona.edit") : t("persona.newTitle"))}</h2>
                     <p className="sub">
                       {personaReadonly
-                        ? "内置人格只读；保存将复制为新人格。"
-                        : "改完后保存，可在对话顶栏切换。"}
+                        ? t("persona.readonlyHint")
+                        : t("persona.editHint")}
                     </p>
                   </div>
                   <div className="persona-editor-actions">
@@ -1103,7 +1188,7 @@ export default function App() {
                         if (personaEditId) void switchPersona(personaEditId);
                       }}
                     >
-                      用到当前会话
+                      {t("persona.useCurrent")}
                     </button>
                     <button
                       type="button"
@@ -1120,7 +1205,7 @@ export default function App() {
                           .catch((err) => setPersonaMsg(String(err)));
                       }}
                     >
-                      设为默认
+                      {t("persona.makeDefault")}
                     </button>
                   </div>
                 </div>
@@ -1129,7 +1214,7 @@ export default function App() {
 
                 <div className="form persona-form">
                   <div className="persona-field-group">
-                    <h3 className="persona-group-title">基本</h3>
+                    <h3 className="persona-group-title">{t("persona.basic")}</h3>
                     <div className="persona-identity">
                       <div className="persona-avatar-block">
                         {personaEditId &&
@@ -1146,7 +1231,7 @@ export default function App() {
                         )}
                         {personaEditId && !personaReadonly && (
                           <label className="btn ghost file-btn compact">
-                            换头像
+                            {t("persona.changeAvatar")}
                             <input
                               type="file"
                               accept="image/*"
@@ -1168,35 +1253,35 @@ export default function App() {
                         )}
                       </div>
                       <label className="grow">
-                        名称
+                        {t("name")}
                         <input
                           value={personaDraft.name}
                           onChange={(e) =>
                             setPersonaDraft((d) => ({ ...d, name: e.target.value }))
                           }
-                          placeholder="角色显示名"
+                          placeholder={t("persona.namePlaceholder")}
                         />
                       </label>
                     </div>
                   </div>
 
                   <div className="persona-field-group">
-                    <h3 className="persona-group-title">角色设定</h3>
+                    <h3 className="persona-group-title">{t("persona.profile")}</h3>
                     <label>
-                      外貌与背景
-                      <span className="field-hint">对应卡片 description，会进入 system</span>
+                      {t("persona.description")}
+                      <span className="field-hint">{t("persona.descriptionHint")}</span>
                       <textarea
                         rows={5}
                         value={personaDraft.description}
                         onChange={(e) =>
                           setPersonaDraft((d) => ({ ...d, description: e.target.value }))
                         }
-                        placeholder="外貌、身份、背景…"
+                        placeholder={t("persona.descriptionPlaceholder")}
                       />
                     </label>
                     <div className="persona-field-row">
                       <label>
-                        性格
+                        {t("persona.personality")}
                         <span className="field-hint">personality</span>
                         <textarea
                           rows={4}
@@ -1204,11 +1289,11 @@ export default function App() {
                           onChange={(e) =>
                             setPersonaDraft((d) => ({ ...d, personality: e.target.value }))
                           }
-                          placeholder="说话方式、脾气、偏好…"
+                          placeholder={t("persona.personalityPlaceholder")}
                         />
                       </label>
                       <label>
-                        场景
+                        {t("persona.scenario")}
                         <span className="field-hint">scenario</span>
                         <textarea
                           rows={4}
@@ -1216,29 +1301,29 @@ export default function App() {
                           onChange={(e) =>
                             setPersonaDraft((d) => ({ ...d, scenario: e.target.value }))
                           }
-                          placeholder="当前情境、地点、关系…"
+                          placeholder={t("persona.scenarioPlaceholder")}
                         />
                       </label>
                     </div>
                   </div>
 
                   <div className="persona-field-group">
-                    <h3 className="persona-group-title">开场白</h3>
+                    <h3 className="persona-group-title">{t("persona.greetings")}</h3>
                     <label>
-                      默认开场
-                      <span className="field-hint">空会话时第一条欢迎语</span>
+                      {t("persona.opener")}
+                      <span className="field-hint">{t("persona.openerHint")}</span>
                       <textarea
                         rows={3}
                         value={personaDraft.opener}
                         onChange={(e) =>
                           setPersonaDraft((d) => ({ ...d, opener: e.target.value }))
                         }
-                        placeholder="你好，我是…"
+                        placeholder={t("persona.openerPlaceholder")}
                       />
                     </label>
                     <label>
-                      备选开场
-                      <span className="field-hint">多条用单独一行的 --- 分隔；对话页可左右切换</span>
+                      {t("persona.alternates")}
+                      <span className="field-hint">{t("persona.alternatesHint")}</span>
                       <textarea
                         rows={4}
                         value={personaDraft.alternate_greetings}
@@ -1254,24 +1339,22 @@ export default function App() {
                   </div>
 
                   <div className="persona-field-group">
-                    <h3 className="persona-group-title">进阶（可选）</h3>
+                    <h3 className="persona-group-title">{t("persona.advanced")}</h3>
                     <label>
-                      系统提示
-                      <span className="field-hint">
-                        非空时优先用这段；可用 {"{{char}}"} / {"{{user}}"} / {"{{original}}"}
-                      </span>
+                      {t("persona.systemPrompt")}
+                      <span className="field-hint">{t("persona.systemPromptHint")}</span>
                       <textarea
                         rows={4}
                         value={personaDraft.system_prompt}
                         onChange={(e) =>
                           setPersonaDraft((d) => ({ ...d, system_prompt: e.target.value }))
                         }
-                        placeholder="留空则按外貌、性格、场景自动拼装"
+                        placeholder={t("persona.systemPromptPlaceholder")}
                       />
                     </label>
                     <label>
-                      历史后指令
-                      <span className="field-hint">插在历史与本轮用户消息之间</span>
+                      {t("persona.postHistory")}
+                      <span className="field-hint">{t("persona.postHistoryHint")}</span>
                       <textarea
                         rows={2}
                         value={personaDraft.post_history_instructions}
@@ -1281,13 +1364,13 @@ export default function App() {
                             post_history_instructions: e.target.value,
                           }))
                         }
-                        placeholder="例如：始终保持人设，不要跳出角色"
+                        placeholder={t("persona.postHistoryPlaceholder")}
                       />
                     </label>
                     {loreEntries.length > 0 && (
                       <div className="lore-preview">
-                        <p className="persona-group-title">角色书</p>
-                        <p className="sub">已导入 {loreEntries.length} 条，对话时按关键词注入。</p>
+                        <p className="persona-group-title">{t("persona.lorebook")}</p>
+                        <p className="sub">{t("persona.loreCount", { count: loreEntries.length })}</p>
                         <ul>
                           {loreEntries.slice(0, 20).map((entry, i) => {
                             const keys = Array.isArray(entry.keys)
@@ -1297,7 +1380,7 @@ export default function App() {
                             const constant = !!entry.constant;
                             return (
                               <li key={i}>
-                                <strong>{constant ? "常驻" : keys || "（无关键词）"}</strong>
+                                <strong>{constant ? t("persona.always") : keys || t("persona.noKeywords")}</strong>
                                 <span>
                                   {content.slice(0, 120)}
                                   {content.length > 120 ? "…" : ""}
@@ -1312,7 +1395,7 @@ export default function App() {
 
                   <div className="persona-form-footer">
                     <button type="button" onClick={() => void savePersonaDraft()}>
-                      {personaReadonly ? "另存为新人格" : "保存"}
+                      {personaReadonly ? t("persona.saveAs") : t("save")}
                     </button>
                     {personaEditId && !personaReadonly && (
                       <button
@@ -1331,7 +1414,7 @@ export default function App() {
                             .catch((err) => setPersonaMsg(String(err)));
                         }}
                       >
-                        删除
+                        {t("delete")}
                       </button>
                     )}
                   </div>
@@ -1345,28 +1428,28 @@ export default function App() {
           <div className="memory-stage">
             <div className="memory-column">
               <div className="section-head">
-                <h1>我记得什么</h1>
-                <p className="sub">{summary?.headline || "加载中…"}</p>
+                <h1>{t("memory.title")}</h1>
+                <p className="sub">{summary?.headline || t("loading")}</p>
               </div>
               <div className="row">
                 <button type="button" className="btn ghost" onClick={() => void refreshMemory()}>
-                  刷新
+                  {t("refresh")}
                 </button>
                 <button
                   type="button"
                   className="btn ghost"
                   onClick={() => void api.consolidate().then(refreshMemory)}
                 >
-                  立即固化
+                  {t("consolidate")}
                 </button>
               </div>
               <div className="form remember-form">
                 <label>
-                  纠正 / 请记住
+                  {t("memory.correctLabel")}
                   <input
                     value={correction}
                     onChange={(e) => setCorrection(e.target.value)}
-                    placeholder="例如：请记住我喜欢被叫小周"
+                    placeholder={t("memory.correctPlaceholder")}
                   />
                 </label>
                 <button
@@ -1380,7 +1463,7 @@ export default function App() {
                     })
                   }
                 >
-                  写入并固化
+                  {t("memory.write")}
                 </button>
               </div>
               <div className="summary-sections">
@@ -1396,7 +1479,7 @@ export default function App() {
                           void api.archiveKind(sec.kind).then(refreshMemory);
                         }}
                       >
-                        归档此类
+                        {t("archive")}
                       </button>
                     </div>
                     {sec.items.map((it) => (
@@ -1412,7 +1495,7 @@ export default function App() {
                   </div>
                 ))}
                 {summary && summary.total === 0 && (
-                  <p className="sub">还没有记住什么。可以说「请记住…」。</p>
+                  <p className="sub">{t("memory.empty")}</p>
                 )}
               </div>
               {atomDetail && (
@@ -1431,10 +1514,10 @@ export default function App() {
                         })
                       }
                     >
-                      归档
+                      {t("archive")}
                     </button>
                   </div>
-                  <pre className="code">{atomDetail.detail || "（空）"}</pre>
+                    <pre className="code">{atomDetail.detail || "—"}</pre>
                 </div>
               )}
               {error && <div className="error">{error}</div>}
@@ -1446,7 +1529,7 @@ export default function App() {
           <div className="settings-stage">
             <div className="settings-column">
               <div className="section-head">
-                <h1>设置</h1>
+                <h1>{t("settings.title")}</h1>
                 <p className="sub">
                   预设 {settings.preset_id} · sidecar {settings.start_memory_sidecar ? "on" : "off"}
                   {settings.reminders_enabled ? " · 提醒 on" : " · 提醒 off"}
@@ -1466,7 +1549,7 @@ export default function App() {
                 onSubmit={(e) => void saveSettings(e)}
                 key={settings.user_timezone + settings.quiet_hours_start}
               >
-                <h2 className="settings-section">模型</h2>
+                <h2 className="settings-section">{t("settings.model")}</h2>
                 <label className="chk-inline">
                   <input
                     type="checkbox"
@@ -1484,7 +1567,7 @@ export default function App() {
                     }
                     onChange={(e) => void toggleLocalLlm(e.target.checked)}
                   />
-                  使用本地小模型（Qwen3.8-4B Distill）
+                  {t("settings.localModel")}
                 </label>
                 <p className="sub">
                   {(() => {
@@ -1527,7 +1610,7 @@ export default function App() {
                       })
                     }
                   >
-                    取消下载
+                    {t("settings.cancelDownload")}
                   </button>
                 )}
                 <label>
@@ -1539,12 +1622,12 @@ export default function App() {
                   <input name="llm_model" defaultValue={settings.llm_model} />
                 </label>
                 <label>
-                  API Key {settings.llm_api_key_set ? "（已配置，留空不改）" : ""}
+                  API Key {settings.llm_api_key_set ? t("settings.apiKeyConfigured") : ""}
                   <input name="llm_api_key" type="password" placeholder="sk-… / EMPTY" autoComplete="off" />
                 </label>
                 <label className="chk-inline">
                   <input name="tts_enabled" type="checkbox" defaultChecked={settings.tts_enabled} />
-                  TTS（未接通）
+                  {t("settings.tts")}
                 </label>
                 <label className="chk-inline">
                   <input
@@ -1552,14 +1635,14 @@ export default function App() {
                     type="checkbox"
                     defaultChecked={settings.show_memory_hints}
                   />
-                  对话中显示记忆提示
+                  {t("settings.memoryHints")}
                 </label>
                 <label>
                   atom-memory Base URL
                   <input name="atom_memory_base_url" defaultValue={settings.atom_memory_base_url} />
                 </label>
                 <label>
-                  新会话默认 warmth
+                  {t("settings.defaultWarmth")}
                   <input
                     name="default_warmth"
                     type="number"
@@ -1568,17 +1651,17 @@ export default function App() {
                     defaultValue={settings.default_warmth}
                   />
                 </label>
-                <h2 className="settings-section">本机工具与搜索</h2>
+                <h2 className="settings-section">{t("settings.tools")}</h2>
                 <label className="chk-inline">
                   <input
                     name="computer_enabled"
                     type="checkbox"
                     defaultChecked={settings.computer_enabled === true}
                   />
-                  启用本机工具（Shell / Python / 文件）
+                  {t("settings.localTools")}
                 </label>
                 <p className="sub">
-                  本机工具会以运行 Velora 的 Windows 用户权限执行，尚未接入专属沙箱；仅在可信本地对话中手动开启。
+                  {t("settings.localToolsHint")}
                 </p>
                 <label className="chk-inline">
                   <input
@@ -1586,20 +1669,20 @@ export default function App() {
                     type="checkbox"
                     defaultChecked={settings.web_search_enabled !== false}
                   />
-                  启用网页搜索（Tavily）
+                  {t("settings.webSearch")}
                 </label>
                 <label>
-                  Tavily API Key {settings.tavily_api_key_set ? "（已配置，留空不改）" : ""}
+                  Tavily API Key {settings.tavily_api_key_set ? t("settings.apiKeyConfigured") : ""}
                   <input name="tavily_api_key" type="password" placeholder="tvly-…" autoComplete="off" />
                 </label>
-                <h2 className="settings-section">时区与静默</h2>
+                <h2 className="settings-section">{t("settings.time")}</h2>
                 <label>
-                  时区（IANA）
+                  {t("settings.timezone")}
                   <input name="user_timezone" defaultValue={settings.user_timezone} />
                 </label>
                 {tzSuggest && tzSuggest !== settings.user_timezone && (
                   <p className="sub">
-                    浏览器建议：{tzSuggest}{" "}
+                    {t("settings.browserSuggest", { tz: tzSuggest })}{" "}
                     <button
                       type="button"
                       className="btn ghost"
@@ -1611,7 +1694,7 @@ export default function App() {
                         if (inputEl) inputEl.value = tzSuggest;
                       }}
                     >
-                      填入
+                      {t("settings.fill")}
                     </button>
                   </p>
                 )}
@@ -1621,10 +1704,10 @@ export default function App() {
                     type="checkbox"
                     defaultChecked={settings.quiet_hours_enabled}
                   />
-                  启用静默时段（期间提醒延后）
+                  {t("settings.quietHours")}
                 </label>
                 <label>
-                  静默开始（本地 HH:MM）
+                  {t("settings.quietStart")}
                   <input
                     name="quiet_hours_start"
                     defaultValue={settings.quiet_hours_start}
@@ -1632,7 +1715,7 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  静默结束（本地 HH:MM）
+                  {t("settings.quietEnd")}
                   <input
                     name="quiet_hours_end"
                     defaultValue={settings.quiet_hours_end}
@@ -1640,12 +1723,12 @@ export default function App() {
                   />
                 </label>
                 <button type="submit" className="btn">
-                  保存
+                  {t("save")}
                 </button>
               </form>
 
-              <h2 className="settings-section">MCP 服务</h2>
-              <p className="sub">增改删后点「保存并重载」写入 mcp_server.json 并热重载（不必重启进程）。</p>
+              <h2 className="settings-section">{t("settings.mcp")}</h2>
+              <p className="sub">{t("settings.mcpHint")}</p>
               {mcpMsg && <p className="sub">{mcpMsg}</p>}
               <div className="mcp-list">
                 {mcpRows.map((row, idx) => {
@@ -1668,7 +1751,7 @@ export default function App() {
                         </label>
                         <input
                           type="text"
-                          placeholder="名称"
+                          placeholder={t("settings.serverName")}
                           value={row.name}
                           onChange={(e) => updateMcpRow(idx, { name: e.target.value })}
                         />
@@ -1729,7 +1812,7 @@ export default function App() {
                           />
                           <input
                             type="text"
-                            placeholder="args（空格分隔）"
+                            placeholder={t("settings.args")}
                             value={argsStr}
                             onChange={(e) =>
                               updateMcpRow(idx, {
@@ -1743,14 +1826,14 @@ export default function App() {
                       )}
                       <div className="row">
                         <button type="button" className="btn ghost" onClick={() => void testMcpRow(idx)}>
-                          测连
+                          {t("settings.test")}
                         </button>
                         <button
                           type="button"
                           className="btn danger"
                           onClick={() => setMcpRows((xs) => xs.filter((_, i) => i !== idx))}
                         >
-                          删除
+                          {t("delete")}
                         </button>
                       </div>
                     </div>
@@ -1771,10 +1854,10 @@ export default function App() {
                     ])
                   }
                 >
-                  添加服务
+                  {t("settings.addServer")}
                 </button>
                 <button type="button" className="btn" onClick={() => void saveMcpAndReload()}>
-                  保存并重载
+                  {t("settings.saveReload")}
                 </button>
                 <button
                   type="button"
@@ -1786,14 +1869,14 @@ export default function App() {
                     })
                   }
                 >
-                  仅重载
+                  {t("settings.reload")}
                 </button>
               </div>
 
-              <h2 className="settings-section">高级</h2>
+              <h2 className="settings-section">{t("settings.advanced")}</h2>
               <label className="chk-inline">
                 <input type="checkbox" checked={debugOn} onChange={(e) => toggleDebug(e.target.checked)} />
-                调试模式
+                {t("settings.debug")}
               </label>
               {debugOn && (
                 <div className="debug-panel">
@@ -1805,14 +1888,14 @@ export default function App() {
                       memory {status?.memory.ok ? "ok" : "?"}
                     </span>
                     <button type="button" className="btn ghost" onClick={() => void probe()}>
-                      探测状态
+                      {t("settings.probe")}
                     </button>
                     <button
                       type="button"
                       className="btn ghost"
                       onClick={() => void api.consolidate().then((r) => pushLog("consolidate", r, false))}
                     >
-                      手动固化
+                      {t("settings.manualConsolidate")}
                     </button>
                     <a
                       href={`${memBase.replace(/\/$/, "")}/ui?uid=${encodeURIComponent(space)}`}
@@ -1822,11 +1905,11 @@ export default function App() {
                       atom /ui
                     </a>
                     <button type="button" className="btn ghost" onClick={() => setLogs([])}>
-                      清空日志
+                      {t("settings.clearLogs")}
                     </button>
                   </div>
                   <div className="log-list">
-                    {logs.length === 0 && <p className="sub">发送消息后出现事件。</p>}
+                    {logs.length === 0 && <p className="sub">{t("settings.noLogs")}</p>}
                     {logs.map((l) => (
                       <details key={l.id} className="log" open={l.open}>
                         <summary>
@@ -1850,26 +1933,26 @@ export default function App() {
           <button
             type="button"
             className="drawer-backdrop"
-            aria-label="关闭日程"
+            aria-label={t("schedule.closeAria")}
             onClick={() => setScheduleOpen(false)}
           />
           <aside className="drawer">
             <div className="drawer-head">
-              <h1>日程</h1>
+              <h1>{t("schedule.title")}</h1>
               <button type="button" className="btn ghost" onClick={() => setScheduleOpen(false)}>
-                关闭
+                {t("close")}
               </button>
             </div>
             <p className="sub">
-              按时区 {tz} 解释时间；静默时段内会延后投递。到期走完整 Agent（可写文件到会话）。
+              {t("schedule.subtitle", { tz })}
             </p>
             <div className="form rem-form">
               <label>
-                事项
-                <input value={remNote} onChange={(e) => setRemNote(e.target.value)} placeholder="明天下午开会" />
+                {t("schedule.note")}
+                <input value={remNote} onChange={(e) => setRemNote(e.target.value)} placeholder={t("schedule.notePlaceholder")} />
               </label>
               <label>
-                重复
+                {t("schedule.repeat")}
                 <select
                   value={remRepeat}
                   onChange={(e) =>
@@ -1878,16 +1961,16 @@ export default function App() {
                     )
                   }
                 >
-                  <option value="once">不重复</option>
-                  <option value="daily">每天</option>
-                  <option value="weekdays">工作日</option>
-                  <option value="weekly">每周</option>
-                  <option value="custom">自定义 cron</option>
+                  <option value="once">{t("schedule.once")}</option>
+                  <option value="daily">{t("schedule.daily")}</option>
+                  <option value="weekdays">{t("schedule.weekdays")}</option>
+                  <option value="weekly">{t("schedule.weekly")}</option>
+                  <option value="custom">{t("schedule.custom")}</option>
                 </select>
               </label>
               {remRepeat !== "custom" && (
                 <label>
-                  {remRepeat === "once" ? "时间（本地）" : "首次参考时间（本地）"}
+                  {remRepeat === "once" ? t("schedule.time") : t("schedule.firstTime")}
                   <input
                     type="datetime-local"
                     value={remDueLocal}
@@ -1913,20 +1996,20 @@ export default function App() {
                 }
                 onClick={() => void createReminder()}
               >
-                创建提醒
+                {t("schedule.create")}
               </button>
             </div>
             <ul className="rem-list">
-              {reminders.length === 0 && <li className="sub">暂无待办提醒</li>}
+              {reminders.length === 0 && <li className="sub">{t("schedule.empty")}</li>}
               {reminders.map((r) => (
                 <li key={r.id}>
                   <div>
                     <strong>{r.note}</strong>
                     <div className="meta">
-                      下次 {formatInTz(r.due_at, tz)}
+                      {t("schedule.next", { time: formatInTz(r.due_at, tz) })}
                       {r.schedule_kind === "cron" && r.cron_expr
-                        ? ` · 周期 ${r.cron_expr}`
-                        : " · 一次"}
+                        ? t("schedule.recurring", { cron: r.cron_expr })
+                        : t("schedule.oneOff")}
                     </div>
                   </div>
                   <button
@@ -1936,7 +2019,7 @@ export default function App() {
                       void api.cancelReminder(r.id).then(() => session && loadReminders(session.id))
                     }
                   >
-                    取消
+                    {t("cancel")}
                   </button>
                 </li>
               ))}
