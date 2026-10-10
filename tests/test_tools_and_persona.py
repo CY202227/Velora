@@ -240,22 +240,38 @@ async def test_llm_tool_loop_final_text(store: ConversationStore) -> None:
     class FakeProvider:
         def __init__(self) -> None:
             self.n = 0
+            self.stream_chat_calls = 0
 
-        async def chat(self, messages, *, model, tools=None, tool_choice=None):
-            del messages, model, tools, tool_choice
+        async def stream_chat(self, messages, *, model, tools=None, tool_choice=None):
+            from server.core.provider.base import StreamEvent
+
+            del messages, model, tool_choice
+            self.stream_chat_calls += 1
             self.n += 1
             if self.n == 1:
-                return ChatResult(
-                    content=None,
-                    tool_calls=[
-                        ToolCall(id="c1", name="get_current_time", arguments="{}")
-                    ],
+                assert tools  # first round should carry tools
+                yield StreamEvent(
+                    final=ChatResult(
+                        content=None,
+                        tool_calls=[
+                            ToolCall(
+                                id="c1", name="get_current_time", arguments="{}"
+                            )
+                        ],
+                    )
                 )
-            return ChatResult(content="现在是测试时间。", tool_calls=[])
+                return
+            # Second round: final answer in the same stream (no extra generate)
+            assert tools is None or tools is not None
+            yield StreamEvent(delta="现在是")
+            yield StreamEvent(delta="测试时间。")
+            yield StreamEvent(final=ChatResult(content="现在是测试时间。", tool_calls=[]))
+
+        async def chat(self, messages, *, model, tools=None, tool_choice=None):
+            raise AssertionError("chat() must not be used when stream_chat exists")
 
         async def stream(self, messages, *, model):
-            del messages, model
-            yield "现在是测试时间。"
+            raise AssertionError("stream() must not be used when stream_chat exists")
 
     provider = FakeProvider()
     ctx = TurnContext(
@@ -286,8 +302,85 @@ async def test_llm_tool_loop_final_text(store: ConversationStore) -> None:
     assert "tool_call" in events
     assert "tool_result" in events
     assert "token" in events
+    assert provider.stream_chat_calls == 2  # tool round + final; never a probe+replay
 
     await store.add_turn(sess.id, "user", "几点了")
     await store.add_turn(sess.id, "assistant", ctx.assistant_text)
     turns = await store.list_turns(sess.id)
     assert all(t.role in ("user", "assistant") for t in turns)
+
+
+@pytest.mark.asyncio
+async def test_llm_plain_reply_single_stream_with_tools() -> None:
+    """Idle chat with tools attached must not double-generate."""
+    from server.core.provider.base import StreamEvent
+
+    reg = ToolRegistry()
+    register_builtin_tools(reg)
+
+    class FakeProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def stream_chat(self, messages, *, model, tools=None, tool_choice=None):
+            del messages, model, tool_choice
+            self.calls += 1
+            assert tools  # tools still offered
+            yield StreamEvent(delta="你好呀")
+            yield StreamEvent(final=ChatResult(content="你好呀", tool_calls=[]))
+
+    provider = FakeProvider()
+    ctx = TurnContext(
+        request=TurnRequest(session_id="s", user_text="你好"),
+        session_id="s",
+        model="m",
+        llm_base_url="http://127.0.0.1",
+        llm_api_key="k",
+        messages=[
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "你好"},
+        ],
+    )
+    ctx.extras["tools"] = reg.openai_tools()
+    tokens: list[str] = []
+
+    async def emit(ev):
+        if ev.type == "token":
+            tokens.append(ev.data.get("text") or "")
+
+    ctx.emit = emit
+    node = LLMNode(provider, tools=reg, max_tool_rounds=4)  # type: ignore[arg-type]
+    assert await node.process(ctx) is NodeResult.CONTINUE
+    assert ctx.assistant_text == "你好呀"
+    assert provider.calls == 1
+    assert "".join(tokens) == "你好呀"
+
+
+def test_merge_tool_call_delta() -> None:
+    from server.core.provider.openai_compat import (
+        _merge_tool_call_delta,
+        _parse_tool_calls,
+    )
+
+    acc: dict[int, dict] = {}
+    _merge_tool_call_delta(
+        acc,
+        [
+            {
+                "index": 0,
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "get_current_time", "arguments": ""},
+            }
+        ],
+    )
+    _merge_tool_call_delta(
+        acc, [{"index": 0, "function": {"arguments": "{\"x\":"}}]
+    )
+    _merge_tool_call_delta(
+        acc, [{"index": 0, "function": {"arguments": "1}"}}]
+    )
+    calls = _parse_tool_calls([acc[i] for i in sorted(acc)])
+    assert len(calls) == 1
+    assert calls[0].name == "get_current_time"
+    assert calls[0].arguments == '{"x":1}'

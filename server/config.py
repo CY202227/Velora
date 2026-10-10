@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     show_memory_hints: bool = True
     # 0 = more assistant, 100 = more companion (new sessions)
     default_warmth: int = 35
+    default_persona_id: str = "daily-assistant"
 
     # local-default preset: spawn atom-memory on :8020 with Velora
     preset_id: str = "local-default"

@@ -78,6 +78,30 @@ class ReminderRow:
     last_run_at: str | None = None
 
 
+@dataclass
+class PersonaRow:
+    id: str
+    name: str
+    system_prompt: str
+    opener: str | None
+    begin_dialogs: list[str]
+    style_defaults: dict
+    tool_names: list[str] | None
+    skill_names: list[str] | None
+    source: str
+    description: str
+    personality: str
+    scenario: str
+    post_history_instructions: str
+    alternate_greetings: list[str]
+    character_book: dict | None
+    avatar_path: str | None
+    avatar_url: str | None
+    import_meta: dict | None
+    created_at: str
+    updated_at: str
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -144,6 +168,39 @@ class AppSettingModel(Base):
     value: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class PersonaModel(Base):
+    __tablename__ = "personas"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    opener: Mapped[str | None] = mapped_column(Text, nullable=True)
+    begin_dialogs_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    style_defaults_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    tool_names_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    skill_names_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="custom")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    personality: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scenario: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    post_history_instructions: Mapped[str] = mapped_column(
+        Text, nullable=False, default=""
+    )
+    alternate_greetings_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]"
+    )
+    character_book_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    avatar_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    import_meta_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 def _iso(dt: datetime) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
@@ -197,6 +254,70 @@ def _reminder_row(m: ReminderModel) -> ReminderRow:
         schedule_kind=getattr(m, "schedule_kind", None) or "once",
         cron_expr=getattr(m, "cron_expr", None),
         last_run_at=_iso(m.last_run_at) if getattr(m, "last_run_at", None) else None,
+    )
+
+
+def _json_list(raw: str | None) -> list:
+    try:
+        data = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _json_dict(raw: str | None) -> dict:
+    try:
+        data = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _persona_row(m: PersonaModel) -> PersonaRow:
+    tool_raw = m.tool_names_json
+    skill_raw = m.skill_names_json
+    tool_names = None
+    skill_names = None
+    if tool_raw is not None:
+        tool_names = [str(x) for x in _json_list(tool_raw)]
+    if skill_raw is not None:
+        skill_names = [str(x) for x in _json_list(skill_raw)]
+    book: dict | None = None
+    if m.character_book_json and m.character_book_json.strip() not in (
+        "",
+        "null",
+    ):
+        try:
+            parsed = json.loads(m.character_book_json)
+        except json.JSONDecodeError:
+            parsed = None
+        book = parsed if isinstance(parsed, dict) else None
+    meta = None
+    if m.import_meta_json:
+        meta = _json_dict(m.import_meta_json) or None
+    return PersonaRow(
+        id=m.id,
+        name=m.name,
+        system_prompt=m.system_prompt or "",
+        opener=m.opener,
+        begin_dialogs=[str(x) for x in _json_list(m.begin_dialogs_json)],
+        style_defaults=_json_dict(m.style_defaults_json),
+        tool_names=tool_names,
+        skill_names=skill_names,
+        source=m.source or "custom",
+        description=m.description or "",
+        personality=m.personality or "",
+        scenario=m.scenario or "",
+        post_history_instructions=m.post_history_instructions or "",
+        alternate_greetings=[
+            str(x) for x in _json_list(m.alternate_greetings_json)
+        ],
+        character_book=book,
+        avatar_path=m.avatar_path,
+        avatar_url=m.avatar_url,
+        import_meta=meta,
+        created_at=_iso(m.created_at),
+        updated_at=_iso(m.updated_at),
     )
 
 
@@ -341,6 +462,7 @@ class ConversationStore:
         style_knobs: dict | None = None,
         tts_enabled: bool | None = None,
         model: str | None = None,
+        persona_id: str | None = None,
     ) -> SessionRow | None:
         async with self._session_factory() as db:
             m = await db.get(SessionModel, session_id)
@@ -354,6 +476,8 @@ class ConversationStore:
                 m.tts_enabled = tts_enabled
             if model is not None:
                 m.model = model
+            if persona_id is not None:
+                m.persona_id = persona_id
             m.updated_at = _utcnow()
             await db.commit()
             await db.refresh(m)
@@ -601,3 +725,90 @@ class ConversationStore:
                 await db.commit()
                 await db.refresh(m)
             return _reminder_row(m)
+
+    def _persona_to_model_fields(self, p: "Persona") -> dict:
+        from server.core.persona.default import Persona as PersonaT
+
+        del PersonaT  # type hint only
+        return {
+            "name": p.name,
+            "system_prompt": p.system_prompt or "",
+            "opener": p.opener,
+            "begin_dialogs_json": json.dumps(
+                p.begin_dialogs or [], ensure_ascii=False
+            ),
+            "style_defaults_json": json.dumps(
+                p.style_defaults or {}, ensure_ascii=False
+            ),
+            "tool_names_json": (
+                None
+                if p.tool_names is None
+                else json.dumps(p.tool_names, ensure_ascii=False)
+            ),
+            "skill_names_json": (
+                None
+                if p.skill_names is None
+                else json.dumps(p.skill_names, ensure_ascii=False)
+            ),
+            "source": p.source or "custom",
+            "description": p.description or "",
+            "personality": p.personality or "",
+            "scenario": p.scenario or "",
+            "post_history_instructions": p.post_history_instructions or "",
+            "alternate_greetings_json": json.dumps(
+                p.alternate_greetings or [], ensure_ascii=False
+            ),
+            "character_book_json": (
+                json.dumps(p.character_book, ensure_ascii=False)
+                if p.character_book is not None
+                else None
+            ),
+            "avatar_path": p.avatar_path,
+            "avatar_url": p.avatar_url,
+            "import_meta_json": (
+                json.dumps(p.import_meta, ensure_ascii=False)
+                if p.import_meta is not None
+                else None
+            ),
+        }
+
+    async def list_personas(self) -> list[PersonaRow]:
+        async with self._session_factory() as db:
+            result = await db.scalars(
+                select(PersonaModel).order_by(PersonaModel.updated_at.desc())
+            )
+            return [_persona_row(m) for m in result.all()]
+
+    async def get_persona(self, persona_id: str) -> PersonaRow | None:
+        async with self._session_factory() as db:
+            m = await db.get(PersonaModel, persona_id)
+            return _persona_row(m) if m else None
+
+    async def upsert_persona(self, persona: "Persona") -> PersonaRow:
+        from server.core.persona.default import Persona as PersonaCls
+
+        if not isinstance(persona, PersonaCls):
+            raise TypeError("persona required")
+        fields = self._persona_to_model_fields(persona)
+        now = _utcnow()
+        async with self._session_factory() as db:
+            m = await db.get(PersonaModel, persona.id)
+            if m is None:
+                m = PersonaModel(id=persona.id, created_at=now, updated_at=now, **fields)
+                db.add(m)
+            else:
+                for k, v in fields.items():
+                    setattr(m, k, v)
+                m.updated_at = now
+            await db.commit()
+            await db.refresh(m)
+            return _persona_row(m)
+
+    async def delete_persona(self, persona_id: str) -> bool:
+        async with self._session_factory() as db:
+            m = await db.get(PersonaModel, persona_id)
+            if m is None:
+                return False
+            await db.delete(m)
+            await db.commit()
+            return True

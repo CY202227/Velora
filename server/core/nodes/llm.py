@@ -5,6 +5,7 @@ from typing import Any
 
 from server.core.chain.context import TurnContext
 from server.core.chain.types import NodeResult
+from server.core.provider.base import ChatResult
 from server.core.provider.openai_compat import OpenAICompatProvider
 from server.core.tools.registry import ToolRegistry
 from server.core.tools.runner import execute_tool
@@ -40,36 +41,56 @@ class LLMNode:
 
         provider = self._provider_for(ctx)
         tools_payload: list[dict[str, Any]] = list(ctx.extras.get("tools") or [])
-
-        if not tools_payload or self._tools is None:
-            return await self._stream_final(ctx, provider, ctx.messages)
-
+        use_tools = bool(tools_payload) and self._tools is not None
         messages: list[dict[str, Any]] = list(ctx.messages)
+
         try:
             for round_i in range(self._max_tool_rounds):
-                result = await provider.chat(
-                    messages, model=ctx.model, tools=tools_payload
+                # AstrBot-style: one streaming request includes tools. A plain reply
+                # (no tool_calls) finishes in that same request — no second generate.
+                round_tools = tools_payload if use_tools else None
+                if round_i == self._max_tool_rounds - 1:
+                    round_tools = None
+
+                result = await self._stream_round(
+                    ctx, provider, messages, tools=round_tools
                 )
                 if not result.tool_calls:
-                    # Final answer: stream for Desk UX
-                    return await self._stream_final(ctx, provider, messages)
+                    ctx.assistant_text = (result.content or "").strip()
+                    ctx.messages = messages
+                    if not ctx.assistant_text:
+                        ctx.stop_reason = "empty_assistant"
+                        await ctx.publish(
+                            "error", {"message": "Empty model response"}
+                        )
+                        return NodeResult.STOP
+                    return NodeResult.CONTINUE
 
-                assistant_msg: dict[str, Any] = {
-                    "role": "assistant",
-                    "content": result.content or None,
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.name,
-                                "arguments": tc.arguments,
-                            },
-                        }
-                        for tc in result.tool_calls
-                    ],
-                }
-                messages.append(assistant_msg)
+                if self._tools is None:
+                    ctx.stop_reason = "llm_error"
+                    await ctx.publish(
+                        "error",
+                        {"message": "Model requested tools but none registered"},
+                    )
+                    return NodeResult.STOP
+
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": result.content or None,
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.name,
+                                    "arguments": tc.arguments,
+                                },
+                            }
+                            for tc in result.tool_calls
+                        ],
+                    }
+                )
 
                 for tc in result.tool_calls:
                     await ctx.publish(
@@ -101,35 +122,46 @@ class LLMNode:
                         }
                     )
 
-            # Max rounds hit: ask for a plain-text wrap-up without tools
-            return await self._stream_final(ctx, provider, messages)
+            ctx.stop_reason = "empty_assistant"
+            await ctx.publish(
+                "error", {"message": "Tool loop exhausted without a final reply"}
+            )
+            return NodeResult.STOP
         except Exception as exc:
             logger.exception("LLM tool loop failed")
             ctx.stop_reason = "llm_error"
             await ctx.publish("error", {"message": str(exc)})
             return NodeResult.STOP
 
-    async def _stream_final(
+    async def _stream_round(
         self,
         ctx: TurnContext,
         provider: OpenAICompatProvider,
         messages: list[dict[str, Any]],
-    ) -> NodeResult:
-        chunks: list[str] = []
-        try:
-            async for piece in provider.stream(messages, model=ctx.model):
-                chunks.append(piece)
-                await ctx.publish("token", {"text": piece})
-        except Exception as exc:
-            logger.exception("LLM stream failed")
-            ctx.stop_reason = "llm_error"
-            await ctx.publish("error", {"message": str(exc)})
-            return NodeResult.STOP
+        *,
+        tools: list[dict[str, Any]] | None,
+    ) -> ChatResult:
+        """Stream one provider round; publish token deltas live; return final."""
+        stream_chat = getattr(provider, "stream_chat", None)
+        if stream_chat is None:
+            result = await provider.chat(messages, model=ctx.model, tools=tools)
+            if result.tool_calls:
+                return result
+            text = (result.content or "").strip()
+            if not text and hasattr(provider, "stream"):
+                chunks: list[str] = []
+                async for piece in provider.stream(messages, model=ctx.model):
+                    chunks.append(piece)
+                    await ctx.publish("token", {"text": piece})
+                return ChatResult(content="".join(chunks), tool_calls=[])
+            if text:
+                await ctx.publish("token", {"text": text})
+            return result
 
-        ctx.assistant_text = "".join(chunks).strip()
-        ctx.messages = messages
-        if not ctx.assistant_text:
-            ctx.stop_reason = "empty_assistant"
-            await ctx.publish("error", {"message": "Empty model response"})
-            return NodeResult.STOP
-        return NodeResult.CONTINUE
+        final: ChatResult | None = None
+        async for event in stream_chat(messages, model=ctx.model, tools=tools):
+            if event.delta:
+                await ctx.publish("token", {"text": event.delta})
+            if event.final is not None:
+                final = event.final
+        return final or ChatResult()

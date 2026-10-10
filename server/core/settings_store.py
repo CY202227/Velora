@@ -14,6 +14,7 @@ _KEYS = (
     "show_memory_hints",
     "atom_memory_base_url",
     "default_warmth",
+    "default_persona_id",
     "user_timezone",
     "quiet_hours_enabled",
     "quiet_hours_start",
@@ -66,6 +67,8 @@ async def load_settings(
             from server.core.persona.style import clamp_warmth
 
             settings.default_warmth = clamp_warmth(raw)
+        elif key == "default_persona_id":
+            settings.default_persona_id = raw.strip() or settings.default_persona_id
         elif key == "user_timezone":
             settings.user_timezone = raw.strip() or settings.user_timezone
         elif key == "quiet_hours_start":
@@ -91,6 +94,7 @@ async def save_settings(store: ConversationStore, settings: Settings) -> None:
     )
     await store.set_setting("atom_memory_base_url", settings.atom_memory_base_url)
     await store.set_setting("default_warmth", str(settings.default_warmth))
+    await store.set_setting("default_persona_id", settings.default_persona_id)
     await store.set_setting("user_timezone", settings.user_timezone)
     await store.set_setting(
         "quiet_hours_enabled",

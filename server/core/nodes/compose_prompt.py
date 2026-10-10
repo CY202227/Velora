@@ -6,6 +6,8 @@ from typing import Any
 
 from server.core.chain.context import TurnContext
 from server.core.chain.types import NodeResult
+from server.core.persona.default import BUILTIN_PERSONA_ID
+from server.core.persona.lorebook import scan_character_book
 from server.core.persona.style import clamp_warmth, warmth_instruction
 from server.core.skills.manager import SkillManager
 from server.core.tools.registry import ToolRegistry
@@ -27,7 +29,24 @@ class ComposePromptNode:
             ctx.stop_reason = "no_persona"
             return NodeResult.STOP
 
-        system_parts = [ctx.persona.system_prompt.strip()]
+        persona = ctx.persona
+        before_lore, after_lore = scan_character_book(
+            persona.character_book,
+            history_texts=[
+                str(h.get("content") or "")
+                for h in ctx.history
+                if h.get("content")
+            ],
+            user_text=ctx.request.user_text,
+        )
+
+        system_parts: list[str] = []
+        if before_lore:
+            system_parts.append(before_lore)
+        system_parts.append(persona.system_prompt.strip())
+        if after_lore:
+            system_parts.append(after_lore)
+
         warmth = clamp_warmth(ctx.style_knobs.get("warmth", 35))
         system_parts.append(warmth_instruction(warmth))
         if ctx.extras.get("proactive"):
@@ -52,15 +71,15 @@ class ComposePromptNode:
             )
         skills_count = 0
         if self._skills is not None:
-            skills_block = self._skills.build_skills_prompt(ctx.persona.skill_names)
+            skills_block = self._skills.build_skills_prompt(persona.skill_names)
             if skills_block:
                 system_parts.append(skills_block)
-                skills_count = len(self._skills.list_skills(ctx.persona.skill_names))
-        system = "\n\n".join(system_parts)
+                skills_count = len(self._skills.list_skills(persona.skill_names))
+        system = "\n\n".join(p for p in system_parts if p)
 
         messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
 
-        begin = list(ctx.persona.begin_dialogs or [])
+        begin = list(persona.begin_dialogs or [])
         if len(begin) % 2 == 1:
             begin = begin[:-1]
         for i in range(0, len(begin), 2):
@@ -75,20 +94,31 @@ class ComposePromptNode:
             content = item.get("content")
             if role in ("user", "assistant") and content:
                 messages.append({"role": role, "content": content})
+
+        post = (persona.post_history_instructions or "").strip()
+        if post:
+            messages.append({"role": "system", "content": post})
+
         messages.append({"role": "user", "content": ctx.request.user_text})
         ctx.messages = messages
 
         tools_payload: list[dict[str, Any]] = []
         if self._tools is not None:
-            tools_payload = self._tools.openai_tools(ctx.persona.tool_names)
+            tools_payload = self._tools.openai_tools(persona.tool_names)
             if ctx.extras.get("proactive"):
-                # Prevent re-scheduling during delivery wake.
                 block = {"create_reminder", "list_reminders"}
                 tools_payload = [
                     t
                     for t in tools_payload
                     if ((t.get("function") or {}).get("name") not in block)
                 ]
+            # Roleplay cards: keep tools unless explicitly emptied.
+            if (
+                persona.id != BUILTIN_PERSONA_ID
+                and persona.source != "builtin"
+                and persona.tool_names is None
+            ):
+                pass
         ctx.extras["tools"] = tools_payload
 
         await ctx.publish(
@@ -100,6 +130,7 @@ class ComposePromptNode:
                 "warmth": warmth,
                 "tools_count": len(tools_payload),
                 "skills_count": skills_count,
+                "persona_id": persona.id,
                 "system_preview": (messages[0].get("content") or "")[:800],
             },
         )

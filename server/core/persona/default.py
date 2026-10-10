@@ -1,9 +1,11 @@
-"""Built-in daily assistant persona (v0: single persona)."""
+"""Built-in daily assistant persona + Persona dataclass."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+
+BUILTIN_PERSONA_ID = "daily-assistant"
 
 
 @dataclass
@@ -21,12 +23,21 @@ class Persona:
     skill_names: list[str] | None = None
     examples: list[dict[str, str]] = field(default_factory=list)
     import_meta: dict[str, Any] | None = None
+    source: str = "builtin"  # builtin | custom | chara_v2
+    description: str = ""
+    personality: str = ""
+    scenario: str = ""
+    post_history_instructions: str = ""
+    alternate_greetings: list[str] = field(default_factory=list)
+    character_book: dict[str, Any] | None = None
+    avatar_path: str | None = None
+    avatar_url: str | None = None
 
 
 _OPENER = "你好，我是你的日常助理。今天想聊点什么，或需要我帮你记点什么？"
 
 DEFAULT_PERSONA = Persona(
-    id="daily-assistant",
+    id=BUILTIN_PERSONA_ID,
     name="日常助理",
     system_prompt=(
         "你是用户的贴心日常助理：语气稳、清楚、可温暖。"
@@ -44,9 +55,24 @@ DEFAULT_PERSONA = Persona(
     ],
     tool_names=None,
     skill_names=None,
+    source="builtin",
 )
 
 
 def get_persona(persona_id: str | None = None) -> Persona:
-    del persona_id  # v0: only one persona
+    """Sync builtin lookup only. Prefer resolve_persona for DB-backed ids."""
+    if not persona_id or persona_id == BUILTIN_PERSONA_ID:
+        return DEFAULT_PERSONA
     return DEFAULT_PERSONA
+
+
+def greetings_for(persona: Persona) -> list[str]:
+    """first_mes + alternate_greetings (non-empty)."""
+    out: list[str] = []
+    if persona.opener and persona.opener.strip():
+        out.append(persona.opener.strip())
+    for g in persona.alternate_greetings or []:
+        t = (g or "").strip()
+        if t and t not in out:
+            out.append(t)
+    return out

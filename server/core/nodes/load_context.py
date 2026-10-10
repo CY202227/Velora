@@ -6,7 +6,7 @@ from server.core.chain.types import NodeResult
 from server.core.computer.attachments import snapshot_workspace
 from server.core.conversation.store import ConversationStore
 from server.core.memory.client import AtomMemoryClient
-from server.core.persona.default import get_persona
+from server.core.persona.resolve import prepare_persona_for_prompt, resolve_persona
 from server.core.persona.style import merge_style_knobs
 
 
@@ -31,7 +31,8 @@ class LoadContextNode:
             return NodeResult.STOP
 
         persona_id = ctx.request.persona_id or session.persona_id
-        ctx.persona = get_persona(persona_id)
+        raw = await resolve_persona(self.store, persona_id)
+        ctx.persona = prepare_persona_for_prompt(raw)
         ctx.memory_space_uid = session.memory_space_uid
         # Settings are the live source of truth for model routing; session
         # only seeds defaults when a field was never configured globally.
