@@ -1,0 +1,1 @@
+{"mcpServers": {"a": {"command": "uvx", "args": ["demo"], "active": false}, "b": {"url": "http://x/mcp", "transport": "streamable_http", "active": true}}}

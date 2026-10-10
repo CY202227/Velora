@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "demo": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "x"
+      ],
+      "active": false
+    }
+  }
+}
