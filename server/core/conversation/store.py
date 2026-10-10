@@ -161,6 +161,14 @@ class ReminderModel(Base):
     )
 
 
+class MemoryDeliveryModel(Base):
+    __tablename__ = "memory_deliveries"
+    last_attempt: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    space_uid: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class AppSettingModel(Base):
     __tablename__ = "app_settings"
 
@@ -812,3 +820,30 @@ class ConversationStore:
             await db.delete(m)
             await db.commit()
             return True
+
+
+    async def save_memory_delivery(self, key: str, uid: str, payload: dict) -> None:
+        async with self._session_factory() as db:
+            if await db.get(MemoryDeliveryModel, key) is None:
+                db.add(MemoryDeliveryModel(id=key, space_uid=uid, payload=json.dumps(payload, ensure_ascii=False)))
+                await db.commit()
+
+    async def pending_memory_deliveries(self, limit: int = 20) -> list[tuple[str, str, dict]]:
+        async with self._session_factory() as db:
+            rows = (await db.execute(select(MemoryDeliveryModel).order_by(MemoryDeliveryModel.last_attempt, MemoryDeliveryModel.id).limit(limit))).scalars().all()
+            return [(row.id, row.space_uid, json.loads(row.payload)) for row in rows]
+
+    async def finish_memory_delivery(self, key: str) -> None:
+        async with self._session_factory() as db:
+            row = await db.get(MemoryDeliveryModel, key)
+            if row is not None:
+                await db.delete(row)
+                await db.commit()
+
+
+    async def touch_memory_delivery(self, key: str) -> None:
+        async with self._session_factory() as db:
+            row = await db.get(MemoryDeliveryModel, key)
+            if row is not None:
+                row.last_attempt = _utcnow()
+                await db.commit()

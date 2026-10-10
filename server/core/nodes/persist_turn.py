@@ -111,10 +111,9 @@ class PersistTurnNode:
             )
             if written is not None:
                 ctx.memory_wrote = True
-                await self.consolidate_job.run_now(
-                    ctx.memory_space_uid, trigger="correction"
+                ctx.consolidated = await self.consolidate_job.run_now(
+                    ctx.memory_space_uid, trigger="correction", source_id=written["id"]
                 )
-                ctx.consolidated = True
         else:
             written = await self.memory.add_source(
                 ctx.memory_space_uid,

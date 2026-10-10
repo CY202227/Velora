@@ -88,6 +88,7 @@ def build_app_state(settings: Settings) -> AppState:
     memory = AtomMemoryClient(
         settings.atom_memory_base_url,
         settings.atom_memory_api_key,
+        delivery_store=store,
     )
     consolidate_job = ConsolidateJob(
         memory,
