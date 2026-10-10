@@ -126,14 +126,17 @@ async def post_correction(body: CorrectionBody, request: Request) -> dict[str, A
     state = request.app.state.velora
     uid = state.settings.memory_space_uid
     delivery_key = body.idempotency_key or str(uuid.uuid4())
-    written = await state.memory.add_source(
-        uid,
-        kind="correction",
-        content=body.text,
-        salience=0.9,
-        external_ref={"system": "velora", "via": "memory_panel"},
-        idempotency_key=delivery_key,
-    )
+    try:
+        written = await state.memory.add_source(
+            uid,
+            kind="correction",
+            content=body.text,
+            salience=0.9,
+            external_ref={"system": "velora", "via": "memory_panel"},
+            idempotency_key=delivery_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     if written is None:
         if state.memory.delivery_store is not None:
             return {"ok": False, "source": None, "consolidated": False,

@@ -142,6 +142,7 @@ export default function App() {
   const [summary, setSummary] = useState<MemorySummary | null>(null);
   const [atomDetail, setAtomDetail] = useState<AtomRow | null>(null);
   const [correction, setCorrection] = useState("");
+  const [correctionStatus, setCorrectionStatus] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [status, setStatus] = useState<DebugStatus | null>(null);
   const [warmth, setWarmth] = useState(35);
@@ -474,9 +475,11 @@ export default function App() {
             }
           }
           if (type === "persisted" && data && typeof data === "object" && "memory_wrote" in data) {
-            const p = data as { memory_wrote?: boolean; consolidated?: boolean };
+            const p = data as { memory_wrote?: boolean; consolidated?: boolean; memory_queued?: boolean };
             if (p.memory_wrote) {
-              hints.push(p.consolidated ? "本轮已写入记忆并固化" : "本轮已写入记忆");
+              hints.push(p.consolidated ? "本轮已写入记忆并固化" : "本轮记忆已保存，等待固化");
+            } else if (p.memory_queued) {
+              hints.push("本轮记忆已排队，服务恢复后自动补发");
             }
           }
           if (type === "reminder_created") {
@@ -1457,15 +1460,21 @@ export default function App() {
                   className="btn"
                   disabled={!correction.trim()}
                   onClick={() =>
-                    void api.postCorrection(correction.trim()).then(() => {
+                    void api.postCorrection(correction.trim()).then((result) => {
                       setCorrection("");
+                      setCorrectionStatus(result.status === "consolidated"
+                        ? "纠正已生效"
+                        : result.status === "queued"
+                          ? "纠正已排队，服务恢复后自动补发"
+                          : "纠正已保存，等待固化；无需重复提交");
                       return refreshMemory();
-                    })
+                    }).catch((e) => setError(e instanceof Error ? e.message : String(e)))
                   }
                 >
                   {t("memory.write")}
                 </button>
               </div>
+              {correctionStatus && <p role="status">{correctionStatus}</p>}
               <div className="summary-sections">
                 {(summary?.sections || []).map((sec) => (
                   <div key={sec.kind} className="summary-section">
