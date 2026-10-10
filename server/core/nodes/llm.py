@@ -46,7 +46,7 @@ class LLMNode:
 
         try:
             for round_i in range(self._max_tool_rounds):
-                # AstrBot-style: one streaming request includes tools. A plain reply
+                # One streaming request includes tools. A plain reply
                 # (no tool_calls) finishes in that same request — no second generate.
                 round_tools = tools_payload if use_tools else None
                 if round_i == self._max_tool_rounds - 1:
@@ -74,6 +74,14 @@ class LLMNode:
                     )
                     return NodeResult.STOP
 
+                # Providers can stream a natural-language preamble before the
+                # final chunk reveals tool_calls. That text is a draft, not the
+                # answer: tell clients to clear it before we execute actions,
+                # otherwise the eventual answer gets glued to stale narration.
+                await ctx.publish(
+                    "assistant_draft_reset",
+                    {"reason": "tool_call", "round": round_i},
+                )
                 messages.append(
                     {
                         "role": "assistant",

@@ -12,6 +12,10 @@ from server.core.provider.openai_compat import OpenAICompatProvider
 from server.core.settings_store import load_settings, save_settings
 
 
+def test_computer_tools_are_disabled_by_default() -> None:
+    assert Settings(_env_file=None).computer_enabled is False
+
+
 @pytest.mark.asyncio
 async def test_settings_roundtrip(tmp_path: Path) -> None:
     url = f"sqlite+aiosqlite:///{(tmp_path / 's.db').as_posix()}"

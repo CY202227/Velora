@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 import httpx
@@ -18,7 +19,9 @@ class AtomMemoryClient:
         *,
         timeout: float = 30.0,
         consolidate_timeout: float = 120.0,
+        delivery_store=None,
     ) -> None:
+        self.delivery_store = delivery_store
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
@@ -118,16 +121,26 @@ class AtomMemoryClient:
         content: str,
         salience: float = 0.2,
         external_ref: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any] | None:
-        if not await self._ensure_or_bust(uid):
-            return None
         payload: dict[str, Any] = {
             "kind": kind,
             "content": content,
             "salience": salience,
         }
+        if idempotency_key is not None:
+            payload["idempotency_key"] = idempotency_key
         if external_ref is not None:
             payload["external_ref"] = external_ref
+        if self.delivery_store is not None:
+            idempotency_key = idempotency_key or str(uuid.uuid4())
+            payload["idempotency_key"] = idempotency_key
+            await self.delivery_store.save_memory_delivery(idempotency_key, uid, payload)
+        return await self._send_source(uid, payload)
+
+    async def _send_source(self, uid: str, payload: dict) -> dict[str, Any] | None:
+        if not await self._ensure_or_bust(uid):
+            return None
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(
@@ -279,3 +292,33 @@ class AtomMemoryClient:
             )
             resp.raise_for_status()
             return resp.json() if resp.content else {"ok": True}
+
+
+    async def get_source(self, uid: str, source_id: int) -> dict[str, Any] | None:
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(f"{self.base_url}/spaces/{uid}/sources/{source_id}", headers=self._headers())
+                response.raise_for_status()
+                return response.json()
+        except Exception:
+            logger.exception("atom-memory source status failed")
+            return None
+
+
+    async def retry_deliveries(self) -> None:
+        if self.delivery_store is None:
+            return
+        for key, uid, payload in await self.delivery_store.pending_memory_deliveries():
+            await self.delivery_store.touch_memory_delivery(key)
+            source = await self._send_source(uid, payload)
+            if source is None:
+                continue
+            # Query durable state first: a lost response must not repeat consolidation.
+            if source.get("status") in ("consolidated", "skipped"):
+                await self.delivery_store.finish_memory_delivery(key)
+                continue
+            result = await self.consolidate(uid, trigger="correction" if payload["kind"] == "correction" else "scheduled")
+            if result and result.get("status") == "succeeded":
+                current = await self.get_source(uid, source["id"])
+                if current and current.get("status") in ("consolidated", "skipped"):
+                    await self.delivery_store.finish_memory_delivery(key)

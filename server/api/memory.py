@@ -132,8 +132,9 @@ async def post_correction(body: CorrectionBody, request: Request) -> dict[str, A
     )
     if written is None:
         raise HTTPException(502, "failed to write correction source")
-    await state.consolidate_job.run_now(uid, trigger="correction")
-    return {"ok": True, "source": written}
+    consolidated = await state.consolidate_job.run_now(uid, trigger="correction", source_id=written["id"])
+    return {"ok": consolidated, "source": written, "consolidated": consolidated,
+            "status": "consolidated" if consolidated else "pending"}
 
 
 @router.post("/consolidate")
@@ -141,6 +142,6 @@ async def consolidate_now(request: Request) -> dict[str, Any]:
     state = request.app.state.velora
     uid = state.settings.memory_space_uid
     result = await state.memory.consolidate(uid, trigger="manual")
-    if result is None:
+    if result is None or result.get("status") != "succeeded":
         raise HTTPException(502, "consolidate failed")
     return result

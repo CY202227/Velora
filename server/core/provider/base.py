@@ -1,4 +1,4 @@
-"""Thin LLM provider port (AstrBot-shaped, minimal)."""
+"""Small provider interface for streaming model responses and tool calls."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ class ChatResult:
 
 @dataclass
 class StreamEvent:
-    """One piece of a streaming chat turn (AstrBot-style).
+    """One piece of a streaming chat turn.
 
     Deltas carry text; the final event carries the assembled ChatResult
     (content + tool_calls). Exactly one final event is emitted per request.

@@ -19,7 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 memory = [
-    "atom-memory @ git+https://github.com/CY202227/atom-memory.git",
+    "atom-memory @ git+https://github.com/CY202227/atom-memory.git@cd51bed4f4d5e3d9e572bb9ca22a0be7e78f8503",
 ]
 dev = [
     "pytest>=8.0",

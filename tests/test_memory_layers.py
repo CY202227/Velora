@@ -105,6 +105,70 @@ async def test_recall_node_passes_policy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_explicit_correction_skips_stale_memory_recall() -> None:
+    memory = LayerMemory()
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    ctx = TurnContext(
+        request=TurnRequest("s", "请记住我现在改喝茶"),
+        session_id="s",
+        memory_space_uid="u",
+        is_correction=True,
+        emit=emit,
+    )
+    assert await RecallMemoryNode(memory).process(ctx) is NodeResult.SKIP  # type: ignore[arg-type]
+    assert memory.recall_kwargs == {}
+    assert ctx.memory_block == ""
+    assert events[0].data["skipped"] == "correction"
+
+
+@pytest.mark.asyncio
+async def test_recall_event_exposes_only_safe_hit_fields() -> None:
+    class ExplainableMemory(LayerMemory):
+        async def recall(self, uid: str, query: str, **kwargs):
+            del uid, query, kwargs
+            return {
+                "context_block": "<recalled_memory>internal prompt</recalled_memory>",
+                "hits": [
+                    {
+                        "key": "preference-coffee",
+                        "kind": "preference",
+                        "statement": "喜欢手冲咖啡",
+                        "memory_layer": 1,
+                        "detail": "Do not expose this detail",
+                    }
+                ],
+            }
+
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    ctx = TurnContext(
+        request=TurnRequest("s", "我喜欢什么？"),
+        session_id="s",
+        memory_space_uid="u",
+        emit=emit,
+    )
+    await RecallMemoryNode(ExplainableMemory()).process(ctx)  # type: ignore[arg-type]
+
+    data = events[0].data
+    assert data["items"] == [
+        {
+            "key": "preference-coffee",
+            "statement": "喜欢手冲咖啡",
+            "kind": "preference",
+            "memory_layer": 1,
+        }
+    ]
+    assert "context_block" not in data
+
+
+@pytest.mark.asyncio
 async def test_layers_run_every_n_scheduled() -> None:
     memory = LayerMemory()
     job = ConsolidateJob(memory, layer_every_n=2)  # type: ignore[arg-type]

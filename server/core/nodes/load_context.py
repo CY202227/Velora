@@ -4,6 +4,7 @@ from server.config import Settings
 from server.core.chain.context import TurnContext
 from server.core.chain.types import NodeResult
 from server.core.computer.attachments import snapshot_workspace
+from server.core.conversation.compaction import compact_history
 from server.core.conversation.store import ConversationStore
 from server.core.memory.client import AtomMemoryClient
 from server.core.persona.resolve import prepare_persona_for_prompt, resolve_persona
@@ -66,10 +67,20 @@ class LoadContextNode:
         turns = await self.store.list_turns(
             ctx.session_id, limit=self.settings.history_max_messages
         )
+        recent_limit = max(0, min(
+            int(self.settings.history_recent_messages),
+            int(self.settings.history_max_messages),
+        ))
+        older_turns = turns[:-recent_limit] if recent_limit else turns
+        recent_turns = turns[-recent_limit:] if recent_limit else []
+        ctx.history_compaction = compact_history(
+            older_turns,
+            max_chars=self.settings.history_compaction_chars,
+        )
         # Hide synthetic reminder wakes from model history; keep assistant nudges.
         ctx.history = [
             {"role": t.role, "content": t.content}
-            for t in turns
+            for t in recent_turns
             if not (t.source == "reminder" and t.role == "user")
         ]
 

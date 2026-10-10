@@ -250,6 +250,9 @@ async def test_llm_tool_loop_final_text(store: ConversationStore) -> None:
             self.n += 1
             if self.n == 1:
                 assert tools  # first round should carry tools
+                # Some providers emit a sentence before the final chunk proves
+                # this is a tool call. The client must discard that draft.
+                yield StreamEvent(delta="我先查一下。")
                 yield StreamEvent(
                     final=ChatResult(
                         content=None,
@@ -288,10 +291,10 @@ async def test_llm_tool_loop_final_text(store: ConversationStore) -> None:
     ctx.extras["tools"] = reg.openai_tools()
     ctx.extras["settings"] = Settings(user_timezone="UTC")
     ctx.extras["store"] = store
-    events: list[str] = []
+    events: list[tuple[str, dict]] = []
 
     async def emit(ev):
-        events.append(ev.type)
+        events.append((ev.type, ev.data))
 
     ctx.emit = emit
 
@@ -299,9 +302,14 @@ async def test_llm_tool_loop_final_text(store: ConversationStore) -> None:
     result = await node.process(ctx)
     assert result is NodeResult.CONTINUE
     assert ctx.assistant_text == "现在是测试时间。"
-    assert "tool_call" in events
-    assert "tool_result" in events
-    assert "token" in events
+    event_names = [name for name, _ in events]
+    assert "tool_call" in event_names
+    assert "tool_result" in event_names
+    assert "token" in event_names
+    reset_at = event_names.index("assistant_draft_reset")
+    tool_at = event_names.index("tool_call")
+    assert reset_at < tool_at
+    assert events[reset_at][1]["reason"] == "tool_call"
     assert provider.stream_chat_calls == 2  # tool round + final; never a probe+replay
 
     await store.add_turn(sess.id, "user", "几点了")
