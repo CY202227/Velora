@@ -37,6 +37,8 @@ jobs:
       - uses: actions/checkout@v4
       - run: cp .env.docker.example .env.docker
       - run: docker compose --env-file .env.docker up --build -d
-      - run: curl --fail --retry 12 --retry-connrefused --retry-delay 2 http://127.0.0.1:8030/health
+      - run: curl --fail --retry 12 --retry-all-errors --retry-delay 2 http://127.0.0.1:8030/health
+      - if: failure()
+        run: docker compose --env-file .env.docker logs --no-color
       - if: always()
         run: docker compose --env-file .env.docker down --volumes --remove-orphans
