@@ -32,6 +32,7 @@ from server.core.provider.openai_compat import OpenAICompatProvider
 from server.core.reminders.job import ReminderJob
 from server.core.skills import SkillManager
 from server.core.tools import ToolRegistry, register_builtin_tools
+from server.core.tools.wiki import register_wiki_tools
 from server.core.tools.web_search import register_web_search_tool
 
 
@@ -103,6 +104,7 @@ def build_app_state(settings: Settings) -> AppState:
     locks = SessionLockManager()
     tools = ToolRegistry()
     register_builtin_tools(tools)
+    register_wiki_tools(tools, settings)
     sync_optional_tools(tools, settings)
     mcp = McpManager(settings)
     _ensure_skills_seed(settings)
@@ -115,6 +117,7 @@ def build_app_state(settings: Settings) -> AppState:
             max_atoms=settings.memory_max_atoms,
             budget_chars=settings.memory_budget_chars,
             policy=settings.memory_recall_policy,
+            method=settings.memory_recall_method,
         ),
         ComposePromptNode(tools, skills),
         LLMNode(

@@ -194,7 +194,7 @@ async def test_compose_begin_dialogs_and_tool_filter() -> None:
         style_knobs={"warmth": 35},
     )
     await ComposePromptNode(reg).process(ctx2)
-    assert len(ctx2.extras["tools"]) == 4
+    assert {item["function"]["name"] for item in ctx2.extras["tools"]} == set(reg.names())
 
 
 @pytest.mark.asyncio

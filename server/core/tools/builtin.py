@@ -166,6 +166,32 @@ async def _memory_summary(args: dict[str, Any], ctx: TurnContext) -> str:
         return json.dumps({"ok": False, "error": str(exc)})
 
 
+async def _memory_search(args: dict[str, Any], ctx: TurnContext) -> str:
+    memory, settings = _memory(ctx), _settings(ctx)
+    if memory is None or settings is None:
+        return json.dumps({"ok": False, "error": "memory unavailable"})
+    query = str(args.get("query") or "").strip()
+    if not query or len(query) > 500:
+        return json.dumps({"ok": False, "error": "query must contain 1–500 characters"})
+    method = str(args.get("method") or settings.memory_recall_method)
+    if method not in ("bm25", "fuzzy", "llm", "embedding", "hybrid"):
+        return json.dumps({"ok": False, "error": "unsupported retrieval method"})
+    result = await memory.recall(ctx.memory_space_uid, query, method=method,
+        max_atoms=10, budget_chars=1200, detail="statement", policy=settings.memory_recall_policy)
+    return json.dumps({"ok": not bool(result.get("error")), **result}, ensure_ascii=False)
+
+
+async def _memory_expand(args: dict[str, Any], ctx: TurnContext) -> str:
+    memory = _memory(ctx)
+    keys = args.get("keys")
+    if memory is None:
+        return json.dumps({"ok": False, "error": "memory unavailable"})
+    if not isinstance(keys, list) or not 1 <= len(keys) <= 10 or any(not isinstance(key, str) or not key for key in keys):
+        return json.dumps({"ok": False, "error": "keys must contain 1–10 memory keys"})
+    result = await memory.expand(ctx.memory_space_uid, keys, budget_chars=2400)
+    return json.dumps({"ok": not bool(result.get("error")), **result}, ensure_ascii=False)
+
+
 def register_builtin_tools(registry: ToolRegistry) -> None:
     registry.register(
         ToolSpec(
@@ -221,3 +247,9 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
             handler=_memory_summary,
         )
     )
+
+    registry.register(ToolSpec(name="memory_search",
+        description="Search personal memory when initial recall is insufficient. Try concrete terms or a paraphrase. llm recall can handle semantic wording but requires the memory model; embedding/hybrid require an embedder. Do not guess missing facts.",
+        parameters={"type": "object", "properties": {"query": {"type": "string", "maxLength": 500}, "method": {"type": "string", "enum": ["bm25", "fuzzy", "llm", "embedding", "hybrid"]}}, "required": ["query"]}, handler=_memory_search))
+    registry.register(ToolSpec(name="memory_expand", description="Expand memory keys returned by recall or memory_search, including source excerpts. Use before answering when a short statement lacks needed details.",
+        parameters={"type": "object", "properties": {"keys": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 10}}, "required": ["keys"]}, handler=_memory_expand))

@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+wiki = ["xwiki @ git+https://github.com/CY202227/xWiki.git@main"]
 memory = [
     "atom-memory @ git+https://github.com/CY202227/atom-memory.git@main",
 ]

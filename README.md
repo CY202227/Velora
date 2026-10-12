@@ -164,3 +164,8 @@ docker compose --env-file .env.docker up -d
 ```
 
 若本地使用 `refs/atom_memory`，自动启动仍优先读取这份 checkout，需要在该目录更新源码。若连接的是已启动或远程的记忆服务，则需更新那台服务；Velora 不会在每次启动时自动下载代码。
+
+
+## 知识库与再次查找
+
+可选 xWiki 接入及 `memory_search` / `memory_expand` 的使用见 [联动说明](docs/wiki-integration.md)。初始短记忆不足时可以再次检索和展开；这不等于召回质量已经验收通过。

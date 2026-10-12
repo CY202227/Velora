@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -37,6 +38,7 @@ class Settings(BaseSettings):
     memory_max_atoms: int = 5
     # layered = L3 sticky + L2 + L1 (atom-memory default); flat = old retrieve
     memory_recall_policy: str = "layered"
+    memory_recall_method: Literal["bm25", "fuzzy", "llm", "embedding", "hybrid"] = "bm25"
     consolidate_every_n_turns: int = 3
     # After N scheduled L1 consolidates, also run L2 synthesize + L3 persona
     memory_layer_every_n_consolidates: int = 5
@@ -90,6 +92,10 @@ class Settings(BaseSettings):
     computer_timeout_seconds: int = 60
     computer_allow_abs_paths: bool = False
     workspaces_dir: str = f"{(_DATA / 'workspaces').as_posix()}"
+
+    # Optional read-only knowledge library (separate from personal memory).
+    xwiki_enabled: bool = False
+    xwiki_workspace: str = f"{(_DATA / 'wiki').as_posix()}"
 
     # skills
     skills_dir: str = f"{(_DATA / 'skills').as_posix()}"

@@ -186,3 +186,30 @@ async def test_http_correction_failure_restart_retry_and_recall(tmp_path, monkey
         memory_app.dependency_overrides.clear()
         memory_app.dependency_overrides.update(old_overrides)
         engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_panel_retry_does_not_accept_old_correction(tmp_path, monkeypatch):
+    import httpx
+    store = ConversationStore(f"sqlite+aiosqlite:///{(tmp_path / 'panel.db').as_posix()}")
+    await store.init()
+    ref = {"system": "velora", "via": "memory_panel"}
+    payload = {"kind": "correction", "content": "叫我小李", "salience": 0.9, "external_ref": ref, "idempotency_key": "new"}
+    await store.save_memory_delivery("new", "space", payload)
+    old = {**payload, "content": "叫我小周", "idempotency_key": "old", "id": 1, "status": "consolidated"}
+    original = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=[old]))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(transport=transport, **kwargs))
+    client = AtomMemoryClient("http://memory", delivery_store=store)
+    client._send_source = AsyncMock(return_value=None)
+    await client.retry_deliveries()
+    client._send_source.assert_awaited_once_with("space", payload)
+    assert len(await store.pending_memory_deliveries()) == 1
+    await store.close()
+
+
+def test_legacy_source_match_checks_payload():
+    payload = {"kind": "correction", "content": "new", "salience": 0.9, "idempotency_key": "key"}
+    assert not AtomMemoryClient._same_delivery({**payload, "content": "old", "idempotency_key": None}, payload)
+    assert AtomMemoryClient._same_delivery({**payload, "idempotency_key": None}, payload)
+    assert not AtomMemoryClient._same_delivery({**payload, "idempotency_key": "other"}, payload)

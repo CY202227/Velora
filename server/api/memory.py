@@ -132,7 +132,7 @@ async def post_correction(body: CorrectionBody, request: Request) -> dict[str, A
             kind="correction",
             content=body.text,
             salience=0.9,
-            external_ref={"system": "velora", "via": "memory_panel"},
+            external_ref={"system": "velora", "via": "memory_panel", "delivery_id": delivery_key},
             idempotency_key=delivery_key,
         )
     except ValueError as exc:

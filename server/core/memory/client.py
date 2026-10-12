@@ -111,7 +111,7 @@ class AtomMemoryClient:
                 return resp.json()
         except Exception:
             logger.exception("atom-memory recall failed")
-            return {"context_block": "", "hits": []}
+            return {"context_block": "", "hits": [], "error": "memory recall unavailable"}
 
     async def add_source(
         self,
@@ -318,7 +318,7 @@ class AtomMemoryClient:
             return None
 
     async def find_source_by_external_ref(
-        self, uid: str, external_ref: dict[str, Any]
+        self, uid: str, external_ref: dict[str, Any], payload: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
         """Find a previously delivered source without requiring a new API endpoint."""
         try:
@@ -333,6 +333,7 @@ class AtomMemoryClient:
                         source
                         for source in response.json()
                         if source.get("external_ref") == external_ref
+                        and (payload is None or self._same_delivery(source, payload))
                     ),
                     None,
                 )
@@ -340,6 +341,15 @@ class AtomMemoryClient:
             logger.exception("atom-memory source lookup failed")
             return None
 
+
+    @staticmethod
+    def _same_delivery(source: dict[str, Any], payload: dict[str, Any]) -> bool:
+        key = source.get("idempotency_key")
+        if key is not None and key != payload.get("idempotency_key"):
+            return False
+        # Compatibility with older memory servers: never accept another fact
+        # solely because it shares the panel's broad upstream reference.
+        return all(source.get(field) == payload.get(field) for field in ("kind", "content", "salience"))
 
     async def retry_deliveries(self, consolidate_job=None) -> None:
         if self.delivery_store is None:
@@ -350,7 +360,7 @@ class AtomMemoryClient:
                 await self.delivery_store.touch_memory_delivery(key)
                 external_ref = payload.get("external_ref")
                 source = (
-                    await self.find_source_by_external_ref(uid, external_ref)
+                    await self.find_source_by_external_ref(uid, external_ref, payload)
                     if isinstance(external_ref, dict)
                     else None
                 )
@@ -379,3 +389,15 @@ class AtomMemoryClient:
                         await self.delivery_store.finish_memory_delivery(key)
             except Exception:
                 logger.exception("memory delivery consolidation failed for %s", uid)
+
+
+    async def expand(self, uid: str, keys: list[str], *, budget_chars: int = 1200) -> dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(f"{self.base_url}/spaces/{uid}/atoms/expand",
+                    headers=self._headers(), json={"keys": keys, "budget_chars": budget_chars, "with_evidence": True})
+                response.raise_for_status()
+                return response.json()
+        except Exception:
+            logger.exception("atom-memory expand failed")
+            return {"error": "memory expansion unavailable", "hits": [], "context_block": ""}
