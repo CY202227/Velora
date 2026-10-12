@@ -79,3 +79,16 @@ Shell, Python, and workspace-file tools run with the permissions of the person w
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+
+## Update the memory service
+
+New installs with `.[memory]` fetch atom-memory from its GitHub `main` branch. To refresh an existing environment, run this with its Python and restart the memory service:
+
+```sh
+python -m pip install --upgrade --force-reinstall --no-deps "atom-memory @ git+https://github.com/CY202227/atom-memory.git@main"
+```
+
+Force reinstall also refreshes commits with the same package version. If the new version adds dependencies, run `python -m pip install -e ".[memory]"` afterward.
+
+For Docker, run `docker compose --env-file .env.docker build --no-cache`, then `docker compose --env-file .env.docker up -d`. A local `refs/atom_memory` checkout still takes precedence and must be updated separately. Existing or remote memory services must also be updated separately; Velora does not download code on each startup.

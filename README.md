@@ -23,7 +23,7 @@ docker compose --env-file .env.docker up --build
 docker compose --env-file .env.docker down --volumes
 ```
 
-Docker 中的 shell、Python、工作区文件工具和联网搜索均明确关闭；数据分别持久化在 `velora-data` 与 `memory-data` volumes。`atom-memory` 依赖固定到已验证的提交，保证构建可复现。
+Docker 中的 shell、Python、工作区文件工具和联网搜索均明确关闭；数据分别持久化在 `velora-data` 与 `memory-data` volumes。`atom-memory` 依赖跟随 GitHub 的 `main` 分支。
 
 ### 无私密数据的本地演示
 
@@ -144,3 +144,23 @@ Create the MySQL database first; tables are created on startup.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+
+## 更新记忆服务
+
+新安装 `.[memory]` 会从 atom-memory 的 `main` 分支获取源码。已有环境更新时，使用该环境的 Python 执行下面的命令，然后重启记忆服务：
+
+```sh
+python -m pip install --upgrade --force-reinstall --no-deps "atom-memory @ git+https://github.com/CY202227/atom-memory.git@main"
+```
+
+强制重装用于避免版本号未变化时继续使用旧安装。该命令只刷新 atom-memory 包；如果新版增加依赖，还需执行 `python -m pip install -e ".[memory]"` 补齐依赖。
+
+Docker 更新需重新构建，避免复用依赖安装层：
+
+```sh
+docker compose --env-file .env.docker build --no-cache
+docker compose --env-file .env.docker up -d
+```
+
+若本地使用 `refs/atom_memory`，自动启动仍优先读取这份 checkout，需要在该目录更新源码。若连接的是已启动或远程的记忆服务，则需更新那台服务；Velora 不会在每次启动时自动下载代码。

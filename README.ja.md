@@ -79,3 +79,16 @@ shell、Python、ワークスペースファイルのツールは、Velora を�
 ## ライセンス
 
 MIT。詳細は [LICENSE](LICENSE) を参照してください。
+
+
+## メモリサービスの更新
+
+`.[memory]` の新規インストールでは、atom-memory の GitHub `main` ブランチを取得します。既存環境の更新には、その環境の Python で以下を実行し、メモリサービスを再起動してください。
+
+```sh
+python -m pip install --upgrade --force-reinstall --no-deps "atom-memory @ git+https://github.com/CY202227/atom-memory.git@main"
+```
+
+パッケージのバージョン番号が変わらない場合も更新するため、強制再インストールを指定しています。新しい依存が追加された場合は、その後 `python -m pip install -e ".[memory]"` を実行してください。
+
+Docker は `docker compose --env-file .env.docker build --no-cache` で再ビルドし、`docker compose --env-file .env.docker up -d` で起動します。ローカルの `refs/atom_memory` がある場合は引き続き優先されるため、別途ソースを更新してください。既存またはリモートのメモリサービスも別途更新が必要です。Velora は起動するたびにコードをダウンロードしません。
