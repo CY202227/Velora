@@ -33,17 +33,17 @@ async def main():
     settings.llm_base_url, settings.llm_api_key, settings.llm_model = (connection[key] for key in ("llm_base_url", "llm_api_key", "llm_model"))
     settings.llm_timeout_seconds = 120
     settings.consolidate_max_sources = 1
-    settings.llm_extra_body = {"max_tokens": 4096}
+    settings.llm_extra_body = {**settings.llm_extra_body, "max_tokens": 4096}
     from atom_memory.eval.run_locomo import main as evaluate
     try:
-        arguments = [str(pilot_path), "--consolidate", "llm", "--score", "qa", "--method", "bm25", "--budget-chars", "1200", "--max-atoms", "10", "--out", str(out), "--diagnostics"]
+        arguments = [str(pilot_path), "--consolidate", "llm", "--score", "qa", "--method", "bm25", "--budget-chars", "1200", "--max-atoms", "10", "--out", str(out), "--diagnostics", "--source-turns", "6"]
         if "--diagnose-only" in sys.argv:
             arguments += ["--max-questions", "0"]
         code = await asyncio.to_thread(evaluate, arguments)
         if code:
             raise RuntimeError("live evaluation failed")
         data = json.loads(out.read_text(encoding="utf-8"))
-        data["pilot_scope"] = {"sessions": 3, "questions": len(questions), "batch_size": 1, "timeout_seconds": 120, "selection": "first 12 questions whose evidence lies inside first 3 sessions", "limitation": "not comparable to 98-question full-history oracle runs; model alias does not establish model identity"}
+        data["pilot_scope"] = {"sessions": 3, "questions": len(questions), "batch_size": 1, "source_turns": 6, "timeout_seconds": 120, "selection": "first 12 questions whose evidence lies inside first 3 sessions", "limitation": "input granularity differs from earlier whole-session pilot; not comparable to 98-question oracle runs; model alias does not establish model identity"}
         out.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as exc:
         message = str(exc)
@@ -51,8 +51,10 @@ async def main():
         import re
         status = re.search(r"request failed: (\d{3})", message)
         subtype = next((name for name in ("JSONDecodeError", "LLMError", "ValidationError", "KeyError", "ValueError") if name in message), None)
-        print({"failure_phase": reason, "nested_error_type": subtype, "http_status": int(status.group(1)) if status else None})
-        out.write_text(json.dumps({"status": "failed", "error_type": type(exc).__name__, "failure_reason": reason, "nested_error_type": subtype, "http_status": int(status.group(1)) if status else None, "model_alias": connection["llm_model"], "sessions": 3, "questions": len(questions)}, indent=2), encoding="utf-8")
+        code = re.search(r"LLMError\[([a-z_]+)\]", message)
+        safe_code = code.group(1) if code else None
+        print({"failure_phase": reason, "nested_error_type": subtype, "error_code": safe_code, "http_status": int(status.group(1)) if status else None})
+        out.write_text(json.dumps({"status": "failed", "error_type": type(exc).__name__, "failure_reason": reason, "nested_error_type": subtype, "error_code": safe_code, "http_status": int(status.group(1)) if status else None, "model_alias": connection["llm_model"], "sessions": 3, "questions": len(questions)}, indent=2), encoding="utf-8")
         print("Live pilot failed; no private request data saved in report")
         return 1
     return 0

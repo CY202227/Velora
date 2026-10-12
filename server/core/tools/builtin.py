@@ -178,6 +178,8 @@ async def _memory_search(args: dict[str, Any], ctx: TurnContext) -> str:
         return json.dumps({"ok": False, "error": "unsupported retrieval method"})
     result = await memory.recall(ctx.memory_space_uid, query, method=method,
         max_atoms=10, budget_chars=1200, detail="statement", policy=settings.memory_recall_policy)
+    if args.get("include_source_evidence", True):
+        result["source_evidence"] = await memory.search_sources(ctx.memory_space_uid, query, budget_chars=2400)
     return json.dumps({"ok": not bool(result.get("error")), **result}, ensure_ascii=False)
 
 
@@ -250,6 +252,6 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
 
     registry.register(ToolSpec(name="memory_search",
         description="Search personal memory when initial recall is insufficient. Try concrete terms or a paraphrase. llm recall can handle semantic wording but requires the memory model; embedding/hybrid require an embedder. Do not guess missing facts.",
-        parameters={"type": "object", "properties": {"query": {"type": "string", "maxLength": 500}, "method": {"type": "string", "enum": ["bm25", "fuzzy", "llm", "embedding", "hybrid"]}}, "required": ["query"]}, handler=_memory_search))
+        parameters={"type": "object", "properties": {"query": {"type": "string", "maxLength": 500}, "method": {"type": "string", "enum": ["bm25", "fuzzy", "llm", "embedding", "hybrid"]}, "include_source_evidence": {"type": "boolean", "description": "Include bounded historical source excerpts (default true); these may predate corrections."}}, "required": ["query"]}, handler=_memory_search))
     registry.register(ToolSpec(name="memory_expand", description="Expand memory keys returned by recall or memory_search, including source excerpts. Use before answering when a short statement lacks needed details.",
         parameters={"type": "object", "properties": {"keys": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 10}}, "required": ["keys"]}, handler=_memory_expand))

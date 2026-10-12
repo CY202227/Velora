@@ -26,3 +26,6 @@ CI 新增 knowledge-integration 作业，显式安装 memory/wiki extras，避�
 llm 使用记忆服务已配置的模型进行语义选取；embedding/hybrid 需要在记忆服务配置向量接口。
 工具可以显式选择 method，因此主调用和再次查找无需使用相同方式。
 新增工具不会自动保证高召回，需要真实模型使用工具的验收；不要把流程修复写成准确率提升。
+
+
+memory_search 默认还读取最多4个历史来源片段（总2400字符），用于查证短原子遗漏的细节。可传 include_source_evidence=false 关闭。来源片段与当前原子分开返回，可能包含较早说法；明确较新的纠正优先。硬删除的来源不会被搜索到。需要包含 sources/search 接口的 atom-memory 版本；旧服务不可用时返回 source_evidence.error，已有原子召回仍可使用。

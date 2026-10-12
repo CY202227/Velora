@@ -401,3 +401,13 @@ class AtomMemoryClient:
         except Exception:
             logger.exception("atom-memory expand failed")
             return {"error": "memory expansion unavailable", "hits": [], "context_block": ""}
+
+    async def search_sources(self, uid: str, query: str, *, budget_chars: int = 2400) -> dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(f"{self.base_url}/spaces/{uid}/sources/search",
+                    headers=self._headers(), json={"query": query, "max_sources": 4, "budget_chars": budget_chars})
+                response.raise_for_status()
+                return response.json()
+        except Exception:
+            return {"hits": [], "error": "source search unavailable"}

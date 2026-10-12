@@ -177,6 +177,13 @@ async def test_http_correction_failure_restart_retry_and_recall(tmp_path, monkey
         assert await store.pending_memory_deliveries() == []
         result = await client.recall("http-space", "我叫什么", method="bm25")
         assert "小周" in result["context_block"]
+        evidence = await client.search_sources("http-space", "小周")
+        if "/spaces/{space_uid}/sources/search" in memory_app.openapi()["paths"]:
+            assert evidence["evidence_status"] == "historical_sources"
+            assert "小周" in evidence["hits"][0]["excerpt"]
+        else:
+            # Older main remains supported while the new memory branch is unmerged.
+            assert evidence["error"] == "source search unavailable"
         async with original_client(transport=httpx.ASGITransport(app=memory_app)) as http:
             response = await http.get("http://memory/spaces/http-space/sources")
             assert len(response.json()) == 1

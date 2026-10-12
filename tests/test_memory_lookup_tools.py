@@ -17,10 +17,13 @@ async def test_memory_tools_search_then_expand():
     memory = AsyncMock()
     memory.recall.return_value = {"hits": [{"key": "profile", "statement": "a short fact"}], "context_block": "fact"}
     memory.expand.return_value = {"hits": [{"key": "profile", "detail": "long fact"}]}
+    memory.search_sources.return_value = {"hits": [{"source_id": 1, "excerpt": "original fact"}], "evidence_status": "historical_sources"}
     ctx = TurnContext(request=TurnRequest("s", "identity"), session_id="s", persona=DEFAULT_PERSONA, memory_space_uid="space")
     ctx.extras.update(memory=memory, settings=Settings())
     result = json.loads(await registry.get("memory_search").handler({"query": "identity", "method": "llm"}, ctx))
     assert result["ok"]
+    assert result["source_evidence"]["evidence_status"] == "historical_sources"
+    memory.search_sources.assert_awaited_once_with("space", "identity", budget_chars=2400)
     assert memory.recall.call_args.kwargs["method"] == "llm"
     details = json.loads(await registry.get("memory_expand").handler({"keys": ["profile"]}, ctx))
     assert details["ok"]
