@@ -33,6 +33,7 @@ async def main():
     settings.llm_base_url, settings.llm_api_key, settings.llm_model = (connection[key] for key in ("llm_base_url", "llm_api_key", "llm_model"))
     settings.llm_timeout_seconds = 120
     settings.consolidate_max_sources = 1
+    settings.consolidate_extract_facts = "--extract-facts" in sys.argv
     settings.llm_extra_body = {**settings.llm_extra_body, "max_tokens": 4096}
     from atom_memory.eval.run_locomo import main as evaluate
     try:
@@ -43,7 +44,7 @@ async def main():
         if code:
             raise RuntimeError("live evaluation failed")
         data = json.loads(out.read_text(encoding="utf-8"))
-        data["pilot_scope"] = {"sessions": 3, "questions": len(questions), "batch_size": 1, "source_turns": 6, "timeout_seconds": 120, "selection": "first 12 questions whose evidence lies inside first 3 sessions", "limitation": "input granularity differs from earlier whole-session pilot; not comparable to 98-question oracle runs; model alias does not establish model identity"}
+        data["pilot_scope"] = {"sessions": 3, "questions": len(questions), "batch_size": 1, "source_turns": 6, "timeout_seconds": 120, "extract_facts": settings.consolidate_extract_facts, "selection": "first 12 questions whose evidence lies inside first 3 sessions", "limitation": "input granularity differs from earlier whole-session pilot; not comparable to 98-question oracle runs; model alias does not establish model identity"}
         out.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as exc:
         message = str(exc)
