@@ -29,3 +29,6 @@ llm 使用记忆服务已配置的模型进行语义选取；embedding/hybrid �
 
 
 memory_search 默认还读取最多4个历史来源片段（总2400字符），用于查证短原子遗漏的细节。可传 include_source_evidence=false 关闭。来源片段与当前原子分开返回，可能包含较早说法；明确较新的纠正优先。硬删除的来源不会被搜索到。需要包含 sources/search 接口的 atom-memory 版本；旧服务不可用时返回 source_evidence.error，已有原子召回仍可使用。
+
+
+显式 method=llm 同时用于跨层原子查找和语义来源选择。语义调用使用模型任务超时；向量接口未配置时，memory_search 会尝试语义回退，模型也不可用时仍保留词法路径。工具结果中的 partial、errors 和 fallback_from 分别记录部分失败及回退，不能把成功返回的一部分证据误当作整体失败。语义候选范围会在 source_evidence.coverage 中说明；它可能是部分候选而非全部历史。

@@ -81,7 +81,7 @@ class AtomMemoryClient:
         neighbor_hops: int = 0,
     ) -> dict[str, Any]:
         if not await self._ensure_or_bust(uid):
-            return {"context_block": "", "hits": []}
+            return {"context_block": "", "hits": [], "error": "memory space unavailable"}
         body = {
             "query": query,
             "method": method,
@@ -93,7 +93,7 @@ class AtomMemoryClient:
             "neighbor_hops": neighbor_hops,
         }
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.consolidate_timeout if method == "llm" else self.timeout) as client:
                 resp = await client.post(
                     f"{self.base_url}/spaces/{uid}/recall",
                     headers=self._headers(),
@@ -109,6 +109,8 @@ class AtomMemoryClient:
                     )
                 resp.raise_for_status()
                 return resp.json()
+        except httpx.HTTPStatusError as exc:
+            return {"context_block": "", "hits": [], "error": "memory recall unavailable", "http_status": exc.response.status_code}
         except Exception:
             logger.exception("atom-memory recall failed")
             return {"context_block": "", "hits": [], "error": "memory recall unavailable"}
@@ -402,11 +404,11 @@ class AtomMemoryClient:
             logger.exception("atom-memory expand failed")
             return {"error": "memory expansion unavailable", "hits": [], "context_block": ""}
 
-    async def search_sources(self, uid: str, query: str, *, budget_chars: int = 2400) -> dict[str, Any]:
+    async def search_sources(self, uid: str, query: str, *, budget_chars: int = 2400, method: str = "bm25") -> dict[str, Any]:
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.consolidate_timeout if method == "llm" else self.timeout) as client:
                 response = await client.post(f"{self.base_url}/spaces/{uid}/sources/search",
-                    headers=self._headers(), json={"query": query, "max_sources": 4, "budget_chars": budget_chars})
+                    headers=self._headers(), json={"query": query, "max_sources": 4, "budget_chars": budget_chars, "method": method})
                 response.raise_for_status()
                 return response.json()
         except Exception:

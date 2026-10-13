@@ -177,10 +177,34 @@ async def _memory_search(args: dict[str, Any], ctx: TurnContext) -> str:
     if method not in ("bm25", "fuzzy", "llm", "embedding", "hybrid"):
         return json.dumps({"ok": False, "error": "unsupported retrieval method"})
     result = await memory.recall(ctx.memory_space_uid, query, method=method,
-        max_atoms=10, budget_chars=1200, detail="statement", policy=settings.memory_recall_policy)
+        max_atoms=10, budget_chars=1200, detail="statement", policy="flat" if method == "llm" else settings.memory_recall_policy)
+    fallback_from = None
+    recovery_errors = {}
+    if result.get("error") and result.get("http_status") == 422 and method in ("embedding", "hybrid"):
+        fallback_from = method
+        method = "llm"
+        result = await memory.recall(ctx.memory_space_uid, query, method=method,
+            max_atoms=10, budget_chars=1200, detail="statement", policy="flat")
+        if result.get("error"):
+            recovery_errors["semantic_fallback"] = result["error"]
+            method = "bm25"
+            result = await memory.recall(ctx.memory_space_uid, query, method=method,
+                max_atoms=10, budget_chars=1200, detail="statement", policy=settings.memory_recall_policy)
     if args.get("include_source_evidence", True):
-        result["source_evidence"] = await memory.search_sources(ctx.memory_space_uid, query, budget_chars=2400)
-    return json.dumps({"ok": not bool(result.get("error")), **result}, ensure_ascii=False)
+        result["source_evidence"] = await memory.search_sources(ctx.memory_space_uid, query, budget_chars=2400,
+            method="llm" if method == "llm" else "bm25")
+        if method == "llm" and result["source_evidence"].get("error"):
+            recovery_errors["semantic_source_lookup"] = result["source_evidence"]["error"]
+            result["source_evidence"] = await memory.search_sources(ctx.memory_space_uid, query, budget_chars=2400, method="bm25")
+    errors = recovery_errors
+    if result.get("error"):
+        errors["atom_recall"] = result.pop("error")
+    source_result = result.get("source_evidence", {})
+    if source_result.get("error"):
+        errors["source_lookup"] = source_result["error"]
+    usable_evidence = bool(result.get("hits") or source_result.get("hits"))
+    return json.dumps({"ok": not bool(errors) or usable_evidence, "partial": bool(errors),
+        "errors": errors, "fallback_from": fallback_from, **result}, ensure_ascii=False)
 
 
 async def _memory_expand(args: dict[str, Any], ctx: TurnContext) -> str:
