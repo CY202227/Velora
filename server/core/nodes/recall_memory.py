@@ -43,11 +43,13 @@ class RecallMemoryNode:
         max_atoms: int = 5,
         budget_chars: int = 400,
         policy: str = "layered",
+        method: str = "bm25",
     ) -> None:
         self.client = client
         self.max_atoms = max_atoms
         self.budget_chars = budget_chars
         self.policy = policy
+        self.method = method
 
     async def process(self, ctx: TurnContext) -> NodeResult:
         # A direct "please remember / correct" turn is the user overriding
@@ -74,6 +76,7 @@ class RecallMemoryNode:
             budget_chars=self.budget_chars,
             detail="statement",
             policy=self.policy,
+            method=self.method,
         )
         ctx.memory_block = result.get("context_block") or ""
         hits = result.get("hits") or result.get("atoms") or []

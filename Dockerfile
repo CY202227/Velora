@@ -13,7 +13,7 @@ RUN apt-get update \
 # The built desk lives in server/static, so this image can serve both the API
 # and the bundled UI without a Node runtime.
 COPY . .
-RUN pip install --upgrade pip && pip install ".[memory]"
+RUN pip install --upgrade pip && pip install ".[memory,wiki]"
 
 EXPOSE 8030 8020
 

@@ -166,6 +166,58 @@ async def _memory_summary(args: dict[str, Any], ctx: TurnContext) -> str:
         return json.dumps({"ok": False, "error": str(exc)})
 
 
+async def _memory_search(args: dict[str, Any], ctx: TurnContext) -> str:
+    memory, settings = _memory(ctx), _settings(ctx)
+    if memory is None or settings is None:
+        return json.dumps({"ok": False, "error": "memory unavailable"})
+    query = str(args.get("query") or "").strip()
+    if not query or len(query) > 500:
+        return json.dumps({"ok": False, "error": "query must contain 1–500 characters"})
+    method = str(args.get("method") or settings.memory_recall_method)
+    if method not in ("bm25", "fuzzy", "llm", "embedding", "hybrid"):
+        return json.dumps({"ok": False, "error": "unsupported retrieval method"})
+    result = await memory.recall(ctx.memory_space_uid, query, method=method,
+        max_atoms=10, budget_chars=1200, detail="statement", policy="flat" if method == "llm" else settings.memory_recall_policy)
+    fallback_from = None
+    recovery_errors = {}
+    if result.get("error") and result.get("http_status") == 422 and method in ("embedding", "hybrid"):
+        fallback_from = method
+        method = "llm"
+        result = await memory.recall(ctx.memory_space_uid, query, method=method,
+            max_atoms=10, budget_chars=1200, detail="statement", policy="flat")
+        if result.get("error"):
+            recovery_errors["semantic_fallback"] = result["error"]
+            method = "bm25"
+            result = await memory.recall(ctx.memory_space_uid, query, method=method,
+                max_atoms=10, budget_chars=1200, detail="statement", policy=settings.memory_recall_policy)
+    if args.get("include_source_evidence", True):
+        result["source_evidence"] = await memory.search_sources(ctx.memory_space_uid, query, budget_chars=2400,
+            method="llm" if method == "llm" else "bm25")
+        if method == "llm" and result["source_evidence"].get("error"):
+            recovery_errors["semantic_source_lookup"] = result["source_evidence"]["error"]
+            result["source_evidence"] = await memory.search_sources(ctx.memory_space_uid, query, budget_chars=2400, method="bm25")
+    errors = recovery_errors
+    if result.get("error"):
+        errors["atom_recall"] = result.pop("error")
+    source_result = result.get("source_evidence", {})
+    if source_result.get("error"):
+        errors["source_lookup"] = source_result["error"]
+    usable_evidence = bool(result.get("hits") or source_result.get("hits"))
+    return json.dumps({"ok": not bool(errors) or usable_evidence, "partial": bool(errors),
+        "errors": errors, "fallback_from": fallback_from, **result}, ensure_ascii=False)
+
+
+async def _memory_expand(args: dict[str, Any], ctx: TurnContext) -> str:
+    memory = _memory(ctx)
+    keys = args.get("keys")
+    if memory is None:
+        return json.dumps({"ok": False, "error": "memory unavailable"})
+    if not isinstance(keys, list) or not 1 <= len(keys) <= 10 or any(not isinstance(key, str) or not key for key in keys):
+        return json.dumps({"ok": False, "error": "keys must contain 1–10 memory keys"})
+    result = await memory.expand(ctx.memory_space_uid, keys, budget_chars=2400)
+    return json.dumps({"ok": not bool(result.get("error")), **result}, ensure_ascii=False)
+
+
 def register_builtin_tools(registry: ToolRegistry) -> None:
     registry.register(
         ToolSpec(
@@ -221,3 +273,9 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
             handler=_memory_summary,
         )
     )
+
+    registry.register(ToolSpec(name="memory_search",
+        description="Search personal memory when initial recall is insufficient. Try concrete terms or a paraphrase. llm recall can handle semantic wording but requires the memory model; embedding/hybrid require an embedder. Do not guess missing facts.",
+        parameters={"type": "object", "properties": {"query": {"type": "string", "maxLength": 500}, "method": {"type": "string", "enum": ["bm25", "fuzzy", "llm", "embedding", "hybrid"]}, "include_source_evidence": {"type": "boolean", "description": "Include bounded historical source excerpts (default true); these may predate corrections."}}, "required": ["query"]}, handler=_memory_search))
+    registry.register(ToolSpec(name="memory_expand", description="Expand memory keys returned by recall or memory_search, including source excerpts. Use before answering when a short statement lacks needed details.",
+        parameters={"type": "object", "properties": {"keys": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 10}}, "required": ["keys"]}, handler=_memory_expand))

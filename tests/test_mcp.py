@@ -93,7 +93,7 @@ async def test_mcp_disabled_noop(tmp_path: Path) -> None:
     register_builtin_tools(reg)
     mgr = McpManager(settings)
     await mgr.start(reg)
-    assert len(reg.names()) == 4
+    assert set(reg.names()) == {"get_current_time", "create_reminder", "list_reminders", "memory_summary", "memory_search", "memory_expand"}
     assert mgr.status()["enabled"] is False
     assert mgr.status()["tool_count"] == 0
     await mgr.stop()
@@ -122,7 +122,7 @@ async def test_register_mcp_tools_and_execute() -> None:
     added = mgr.register_tools_from_client_for_tests(reg, client)
     assert added == ["echo_ping"]
     assert reg.get("echo_ping") is not None
-    assert len(reg.names()) == 5
+    assert set(reg.names()) == {"get_current_time", "create_reminder", "list_reminders", "memory_summary", "memory_search", "memory_expand", "echo_ping"}
 
     ctx = TurnContext(
         request=TurnRequest(session_id="s", user_text="x"),
@@ -176,5 +176,5 @@ async def test_empty_config_active_none(tmp_path: Path) -> None:
     register_builtin_tools(reg)
     mgr = McpManager(settings)
     await mgr.start(reg)
-    assert len(reg.names()) == 4
+    assert set(reg.names()) == {"get_current_time", "create_reminder", "list_reminders", "memory_summary", "memory_search", "memory_expand"}
     await mgr.stop()
