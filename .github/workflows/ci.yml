@@ -53,4 +53,4 @@ jobs:
           cache: pip
       - run: pip install -e ".[dev,memory,wiki]"
       - run: python -m pip check
-      - run: python -m pytest tests/test_memory_reliability.py tests/test_memory_lookup_tools.py tests/test_wiki_tools.py -q
+      - run: python -m pytest tests/test_memory_reliability.py tests/test_memory_lookup_tools.py tests/test_wiki_tools.py tests/test_public_memory_runtime.py -q

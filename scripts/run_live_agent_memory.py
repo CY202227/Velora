@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import sys
+import argparse
 from dataclasses import replace
 from pathlib import Path
 
@@ -11,6 +12,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("dataset", type=Path)
+    parser.add_argument("snapshot", type=Path)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--normalize-answer-spans", action="store_true")
+    parser.add_argument("--temperature", type=float)
+    args = parser.parse_args()
     logging.disable(logging.CRITICAL)  # Never print private endpoint addresses from provider exceptions.
     from scripts.memory_eval_runtime import restore_public_memory, saved_connection
     from atom_memory.config import settings as memory_settings
@@ -29,10 +37,13 @@ async def main():
     from server.core.tools.builtin import register_builtin_tools
     from server.core.tools.registry import ToolRegistry
     import httpx
-    dataset, snapshot, output = map(Path, sys.argv[1:4])
+    dataset, snapshot, output = args.dataset, args.snapshot, args.output
     connection = await saved_connection()
+    extra = {**memory_settings.llm_extra_body, "max_tokens": 4096}
+    if args.temperature is not None:
+        extra["temperature"] = args.temperature
     llm = OpenAICompatLLM(connection["llm_base_url"], connection["llm_api_key"], connection["llm_model"],
-        timeout=120, extra_body={**memory_settings.llm_extra_body, "max_tokens": 4096})
+        timeout=120, extra_body=extra)
     runtime = restore_public_memory(dataset, snapshot, llm)
 
     class MemoryClient(AtomMemoryClient):
@@ -55,12 +66,18 @@ async def main():
     # Evaluation only: retain the real persona instructions, but use question language and memory-only tools.
     persona = replace(DEFAULT_PERSONA, begin_dialogs=[], tool_names=["memory_search", "memory_expand"],
         system_prompt=DEFAULT_PERSONA.system_prompt + "\n本轮是记忆问答，请使用提问语言简短回答。若查证后仍不知道，回答 unknown。")
-    provider = OpenAICompatProvider(connection["llm_base_url"], connection["llm_api_key"], timeout=120)
+    class EvaluationProvider(OpenAICompatProvider):
+        def _maybe_sampling(self, payload):
+            super()._maybe_sampling(payload)
+            if args.temperature is not None:
+                payload["temperature"] = args.temperature
+    provider = EvaluationProvider(connection["llm_base_url"], connection["llm_api_key"], timeout=120)
     results = []
     report = {"mode": "real Velora RecallMemory -> ComposePrompt -> LLMNode streaming/tool loop; saved public atoms",
         "complete": False, "configuration": {"dataset_sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(), "snapshot_sha256": hashlib.sha256(snapshot.read_bytes()).hexdigest(),
             "model_alias": connection["llm_model"], "initial_budget": 400, "initial_max_atoms": 5, "max_tool_rounds": 4,
             "answer_span_normalization": "--normalize-answer-spans" in sys.argv,
+            "temperature": args.temperature,
             "limitation": "Public snapshot replay, no new ingestion/consolidation or persistence. Evaluation persona uses question language and two read-only memory tools. Missing snapshot kind defaults to event; all atoms are L1. Raw and optional normalized-span token scores are separate; normalizer sees no gold and must copy an asserted span. Neither is independent truth/grounding judgment."}, "questions": results}
     try:
         for index, question in enumerate(runtime.sample.qa, 1):
@@ -86,6 +103,7 @@ async def main():
                     except (ValueError, TypeError):
                         tool_results.append({"error": "unparseable tool result"})
             results.append({"question": question.question, "answer": question.answer, "prediction": prediction, "f1": f1, "hit": hit,
+                "category": question.category, "initial_memory_block": ctx.memory_block,
                 "stop_reason": ctx.stop_reason, "tool_calls": events, "tool_results": tool_results, "abstained": abstained})
             if "--normalize-answer-spans" in sys.argv:
                 try:
