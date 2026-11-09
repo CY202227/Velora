@@ -220,3 +220,24 @@ def test_legacy_source_match_checks_payload():
     assert not AtomMemoryClient._same_delivery({**payload, "content": "old", "idempotency_key": None}, payload)
     assert AtomMemoryClient._same_delivery({**payload, "idempotency_key": None}, payload)
     assert not AtomMemoryClient._same_delivery({**payload, "idempotency_key": "other"}, payload)
+
+
+@pytest.mark.asyncio
+async def test_consolidation_timeout_retries_once_with_smaller_batch():
+    from unittest.mock import AsyncMock
+    client = AsyncMock()
+    failure = {"status": "failed", "error": "LLMError[timeout]: timed out", "source_ids": list(range(20))}
+    client.consolidate.side_effect = [failure, failure]
+    assert not await ConsolidateJob(client).run_now("space", trigger="scheduled")
+    assert client.consolidate.await_count == 2
+    client.consolidate.assert_awaited_with("space", trigger="scheduled", max_sources=10)
+
+
+@pytest.mark.asyncio
+async def test_consolidation_does_not_retry_ambiguous_transport_or_invalid_evidence():
+    from unittest.mock import AsyncMock
+    for result in (None, {"status": "failed", "error": "LLMError[invalid_evidence]: bad reference", "source_ids": [1, 2]}):
+        client = AsyncMock()
+        client.consolidate.return_value = result
+        assert not await ConsolidateJob(client).run_now("space")
+        assert client.consolidate.await_count == 1
