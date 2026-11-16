@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from server.core.memory.client import AtomMemoryClient
 
@@ -23,6 +24,7 @@ class ConsolidateJob:
         self._task: asyncio.Task | None = None
         self._retry_task: asyncio.Task | None = None
         self._locks: dict[str, asyncio.Lock] = {}
+        self._model_slot = asyncio.Lock()
         self._scheduled_done = 0
 
     def start(self) -> None:
@@ -51,8 +53,17 @@ class ConsolidateJob:
 
     async def run_now(self, space_uid: str, trigger: str = "correction", *, source_id: int | None = None) -> bool:
         lock = self._locks.setdefault(space_uid, asyncio.Lock())
-        async with lock:
+        async with lock, self._model_slot:
             result = await self.client.consolidate(space_uid, trigger=trigger)
+            if result and result.get("status") == "failed":
+                code = self._log_failure(result, trigger)
+                sources = result.get("source_ids") or []
+                if code in {"timeout", "output_truncated"} and len(sources) > 1:
+                    result = await self.client.consolidate(
+                        space_uid, trigger=trigger, max_sources=min(10, len(sources) // 2),
+                    )
+                    if result and result.get("status") == "failed":
+                        self._log_failure(result, trigger)
             if not result or result.get("status") != "succeeded":
                 return False
             await self._maybe_run_layers(space_uid, trigger)
@@ -60,6 +71,14 @@ class ConsolidateJob:
                 source = await self.client.get_source(space_uid, source_id)
                 return bool(source and source.get("status") == "consolidated")
             return True
+
+    @staticmethod
+    def _log_failure(result: dict, trigger: str) -> str:
+        match = re.match(r"LLMError\[([a-z_]+)\]", str(result.get("error") or ""))
+        code = match.group(1) if match else "unclassified"
+        logger.warning("memory consolidation failed: trigger=%s run=%s sources=%d code=%s",
+                       trigger, result.get("id"), len(result.get("source_ids") or []), code)
+        return code
 
     async def _maybe_run_layers(self, space_uid: str, trigger: str) -> None:
         """L2/L3 stay off the L1 path; only a slower scheduled cadence."""

@@ -165,16 +165,19 @@ class AtomMemoryClient:
             return None
 
     async def consolidate(
-        self, uid: str, *, trigger: str = "manual"
+        self, uid: str, *, trigger: str = "manual", max_sources: int | None = None
     ) -> dict[str, Any] | None:
         if not await self._ensure_or_bust(uid):
             return None
+        payload = {"trigger": trigger}
+        if max_sources is not None:
+            payload["max_sources"] = max_sources
         try:
             async with httpx.AsyncClient(timeout=self.consolidate_timeout) as client:
                 resp = await client.post(
                     f"{self.base_url}/spaces/{uid}/consolidate",
                     headers=self._headers(),
-                    json={"trigger": trigger},
+                    json=payload,
                 )
                 if resp.status_code == 404:
                     self._ready.discard(uid)
@@ -182,7 +185,7 @@ class AtomMemoryClient:
                     resp = await client.post(
                         f"{self.base_url}/spaces/{uid}/consolidate",
                         headers=self._headers(),
-                        json={"trigger": trigger},
+                        json=payload,
                     )
                 resp.raise_for_status()
                 return resp.json()
