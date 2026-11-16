@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect,  useState } from "react";
 import {
   api,
   browserTimezone,
-  formatInTz,
-  streamChat,
-  zonedLocalToUtcIso,
+
+
+
   type AtomRow,
   type DebugStatus,
   type LocalLlmStatus,
@@ -12,131 +12,26 @@ import {
   type McpStatus,
   type MemorySummary,
   type Persona,
-  type Reminder,
-  type Session,
+
+
   type Settings,
   type SkillsList,
-  type Turn,
+
 } from "./api";
+import { Operations } from "./Operations";
+import { AuthGate } from "./AuthGate";
 import { localeOptions, savedLocale, translate, type Locale } from "./i18n";
 
 type McpRow = { name: string; entry: McpServerEntry };
 
-type Tab = "chat" | "memory" | "persona" | "settings";
-type Msg = {
-  id?: string;
-  role: "user" | "assistant";
-  content: string;
-  streaming?: boolean;
-  source?: string;
-  created_at?: string;
-  attachments?: Array<{ path: string; name: string; bytes: number; kind: string }>;
-};
+type Tab = "operations" | "memory" | "persona" | "settings";
 type LogItem = { id: number; t: string; title: string; payload: unknown; open?: boolean };
-type RecallItem = {
-  key: string;
-  statement: string;
-  kind: string;
-  memory_layer?: number | null;
-};
 
 let logSeq = 0;
 
-function isReminderMsg(m: Msg): boolean {
-  // Outbound reminder bubbles only (never tag synthetic wake "user" rows).
-  if (m.role === "assistant" && m.source === "reminder") return true;
-  return (m.content || "").startsWith("【提醒】");
-}
-
-function visibleChatMsg(m: Msg): boolean {
-  if (m.source === "opener") return false;
-  // Legacy rows: hide wake prompts that were persisted as user+reminder.
-  if (m.role === "user" && m.source === "reminder") return false;
-  return true;
-}
-
-/** Display-only: split one turn into visual beats. Storage stays a single message. */
-function displayParagraphs(text: string): string[] {
-  const parts = text
-    .split(/\n{2,}/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-  return parts.length > 1 ? parts : text ? [text] : [];
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatMsgTime(iso: string | undefined, timeZone: string, locale: Locale): string | null {
-  if (!iso) return null;
-  try {
-    return new Date(iso).toLocaleString(locale, {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
-  } catch {
-    return iso.slice(0, 16);
-  }
-}
-
-/** Build 5-field cron from local datetime-local value in user timezone. */
-function cronFromLocal(local: string, mode: "daily" | "weekdays" | "weekly"): string {
-  const [, time = "09:00"] = local.split("T");
-  const [hh = "9", mm = "0"] = time.split(":");
-  const minute = String(Number(mm) || 0);
-  const hour = String(Number(hh) || 0);
-  if (mode === "daily") return `${minute} ${hour} * * *`;
-  if (mode === "weekdays") return `${minute} ${hour} * * 1-5`;
-  // weekly: use JS day from the picked local date (Sun=0 … Sat=6)
-  const datePart = local.split("T")[0] || "";
-  const d = new Date(`${datePart}T12:00:00`);
-  const dow = Number.isNaN(d.getTime()) ? 1 : d.getDay();
-  return `${minute} ${hour} * * ${dow}`;
-}
-
-function turnToMsg(t: Turn): Msg {
-  return {
-    id: t.id,
-    role: t.role as "user" | "assistant",
-    content: t.content,
-    source: t.source || "chat",
-    created_at: t.created_at,
-    attachments: t.attachments || [],
-  };
-}
-
-function sessionLabel(s: Session, tz: string, locale: Locale): string {
-  const stamp = s.updated_at || s.created_at;
-  try {
-    return new Date(stamp).toLocaleString(locale, {
-      timeZone: tz,
-      month: "numeric",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
-  } catch {
-    return stamp.slice(0, 16);
-  }
-}
-
-export default function App() {
-  const [tab, setTab] = useState<Tab>("chat");
+function WorkspaceApp() {
+  const [tab, setTab] = useState<Tab>("operations");
   const [locale, setLocale] = useState<Locale>(savedLocale);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [session, setSession] = useState<Session | null>(null);
-  const [msgs, setMsgs] = useState<Msg[]>([]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [summary, setSummary] = useState<MemorySummary | null>(null);
@@ -145,16 +40,6 @@ export default function App() {
   const [correctionStatus, setCorrectionStatus] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [status, setStatus] = useState<DebugStatus | null>(null);
-  const [warmth, setWarmth] = useState(35);
-  const [memHint, setMemHint] = useState<string | null>(null);
-  const [recallItems, setRecallItems] = useState<RecallItem[]>([]);
-  const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [remNote, setRemNote] = useState("");
-  const [remDueLocal, setRemDueLocal] = useState("");
-  const [remRepeat, setRemRepeat] = useState<"once" | "daily" | "weekdays" | "weekly" | "custom">(
-    "once",
-  );
-  const [remCron, setRemCron] = useState("");
   const [tzSuggest, setTzSuggest] = useState("");
   const [mcpStatus, setMcpStatus] = useState<McpStatus | null>(null);
   const [mcpRows, setMcpRows] = useState<McpRow[]>([]);
@@ -164,8 +49,6 @@ export default function App() {
   const [localLlm, setLocalLlm] = useState<LocalLlmStatus | null>(null);
   const [localLlmBusy, setLocalLlmBusy] = useState(false);
   const [localLlmMsg, setLocalLlmMsg] = useState<string | null>(null);
-  const [scheduleOpen, setScheduleOpen] = useState(false);
-  const [prefsOpen, setPrefsOpen] = useState(false);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [personaEditId, setPersonaEditId] = useState<string | null>(null);
   const [personaReadonly, setPersonaReadonly] = useState(false);
@@ -173,6 +56,7 @@ export default function App() {
   const [personaDraft, setPersonaDraft] = useState({
     name: "",
     description: "",
+      voice: "vertin",
     personality: "",
     scenario: "",
     opener: "",
@@ -181,10 +65,6 @@ export default function App() {
     system_prompt: "",
   });
   const [personaMsg, setPersonaMsg] = useState<string | null>(null);
-  const [greetingIndex, setGreetingIndex] = useState(0);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const warmthTimer = useRef<number | null>(null);
-  const lastTurnCount = useRef(0);
 
   const tz = settings?.user_timezone || "Asia/Shanghai";
   const t = (key: string, variables?: Record<string, string | number>) => translate(locale, key, variables);
@@ -218,42 +98,10 @@ export default function App() {
     }
   }
 
-  async function loadReminders(sessionId: string) {
-    const list = await api.listReminders(sessionId, "pending");
-    setReminders(list);
-  }
-
   async function loadPersonas() {
     const list = await api.listPersonas();
     setPersonas(list);
     return list;
-  }
-
-  async function selectSession(s: Session, opener?: string | null) {
-    setSession(s);
-    setWarmth(s.warmth ?? 35);
-    setMemHint(null);
-    setRecallItems([]);
-    const gIdx = s.greeting_index ?? 0;
-    setGreetingIndex(gIdx);
-    const turns = await api.listTurns(s.id);
-    lastTurnCount.current = turns.length;
-    let welcome = opener;
-    try {
-      const p = await api.getPersona(s.persona_id);
-      const greets = p.greetings?.length ? p.greetings : p.opener ? [p.opener] : [];
-      if (greets.length) {
-        welcome = greets[Math.min(gIdx, greets.length - 1)] || greets[0];
-      }
-    } catch {
-      /* keep opener */
-    }
-    if (turns.length === 0 && welcome) {
-      setMsgs([{ role: "assistant", content: welcome, source: "opener" }]);
-    } else {
-      setMsgs(turns.map(turnToMsg));
-    }
-    await loadReminders(s.id);
   }
 
   async function refreshMemory() {
@@ -269,16 +117,6 @@ export default function App() {
         const s = await api.getSettings();
         setSettings(s);
         await loadPersonas();
-        let list = await api.listSessions();
-        if (!list.length) {
-          const created = await api.createSession({
-            warmth: s.default_warmth,
-            persona_id: s.default_persona_id,
-          });
-          list = [created];
-        }
-        setSessions(list);
-        await selectSession(list[0]);
         await probe();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -286,9 +124,7 @@ export default function App() {
     })();
   }, []);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [msgs, tab]);
+
 
   async function loadMcpEditor() {
     try {
@@ -379,185 +215,6 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [tab, localLlmBusy, localLlm?.download?.status, localLlm?.enabled, localLlm?.ready]);
 
-  // Poll turns while chat tab is open (faster when reminders are pending)
-  useEffect(() => {
-    if (tab !== "chat" || !session || busy) return;
-    const sid = session.id;
-    const intervalMs = reminders.length > 0 ? 3000 : 15000;
-    const timer = window.setInterval(() => {
-      void (async () => {
-        try {
-          const turns = await api.listTurns(sid);
-          if (turns.length <= lastTurnCount.current) return;
-          lastTurnCount.current = turns.length;
-          setMsgs(turns.map(turnToMsg));
-          await loadReminders(sid);
-        } catch {
-          /* ignore poll errors */
-        }
-      })();
-    }, intervalMs);
-    return () => window.clearInterval(timer);
-  }, [tab, session?.id, busy, reminders.length]);
-
-  function onWarmthChange(value: number) {
-    setWarmth(value);
-    if (!session) return;
-    if (warmthTimer.current) window.clearTimeout(warmthTimer.current);
-    warmthTimer.current = window.setTimeout(() => {
-      void api.patchSession(session.id, { warmth: value }).then((s) => {
-        setSession(s);
-        setSessions((xs) => xs.map((x) => (x.id === s.id ? s : x)));
-      });
-    }, 300);
-  }
-
-  async function send() {
-    if (!session || !input.trim() || busy) return;
-    const text = input.trim();
-    setInput("");
-    setBusy(true);
-    setError(null);
-    setMemHint(null);
-    setRecallItems([]);
-    pushLog("user_message", { text }, false);
-    const sentAt = new Date().toISOString();
-    setMsgs((m) => [
-      ...m.filter((x) => x.source !== "opener"),
-      { role: "user", content: text, created_at: sentAt },
-      { role: "assistant", content: "", streaming: true, created_at: sentAt },
-    ]);
-    let acc = "";
-    const hints: string[] = [];
-    try {
-      await streamChat(session.id, text, {
-        onToken: (t) => {
-          acc += t;
-          setMsgs((m) => {
-            const copy = [...m];
-            const last = copy[copy.length - 1];
-            copy[copy.length - 1] = {
-              ...last,
-              role: "assistant",
-              content: acc,
-              streaming: true,
-            };
-            return copy;
-          });
-        },
-        onEvent: (type, data) => {
-          if (type === "token") return;
-          pushLog(type, data, type === "error");
-          if (type === "assistant_draft_reset") {
-            acc = "";
-            setMsgs((m) => {
-              const copy = [...m];
-              const last = copy[copy.length - 1];
-              if (last?.role === "assistant" && last.streaming) {
-                copy[copy.length - 1] = { ...last, content: "" };
-              }
-              return copy;
-            });
-          }
-          if (type === "memory_recall" && data && typeof data === "object" && "has_block" in data) {
-            const recall = data as { has_block?: boolean; items?: unknown };
-            if (recall.has_block) hints.push("本轮用到了长期记忆");
-            if (Array.isArray(recall.items)) {
-              setRecallItems(
-                recall.items.filter(
-                  (item): item is RecallItem =>
-                    !!item &&
-                    typeof item === "object" &&
-                    typeof (item as RecallItem).key === "string" &&
-                    typeof (item as RecallItem).statement === "string",
-                ),
-              );
-            }
-          }
-          if (type === "persisted" && data && typeof data === "object" && "memory_wrote" in data) {
-            const p = data as { memory_wrote?: boolean; consolidated?: boolean; memory_queued?: boolean };
-            if (p.memory_wrote) {
-              hints.push(p.consolidated ? "本轮已写入记忆并固化" : "本轮记忆已保存，等待固化");
-            } else if (p.memory_queued) {
-              hints.push("本轮记忆已排队，服务恢复后自动补发");
-            }
-          }
-          if (type === "reminder_created") {
-            void loadReminders(session.id);
-          }
-          if (type === "tool_call" && data && typeof data === "object" && "name" in data) {
-            hints.push(`调用工具 ${(data as { name: string }).name}`);
-          }
-          if (type === "tool_result" && data && typeof data === "object" && "name" in data) {
-            const n = (data as { name: string }).name;
-            if (n === "create_reminder" || n === "list_reminders") {
-              void loadReminders(session.id);
-            }
-          }
-        },
-        onError: (msg) => setError(msg),
-      });
-      setMsgs((m) => {
-        const copy = [...m];
-        const last = copy[copy.length - 1];
-        copy[copy.length - 1] = {
-          ...last,
-          role: "assistant",
-          content: acc || last.content,
-          streaming: false,
-        };
-        return copy;
-      });
-      const turns = await api.listTurns(session.id);
-      lastTurnCount.current = turns.length;
-      setMsgs(turns.map(turnToMsg));
-      if (settings?.show_memory_hints !== false && hints.length) {
-        setMemHint([...new Set(hints)].join(" · "));
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function newSession() {
-    const s = await api.createSession({
-      warmth,
-      persona_id: session?.persona_id || settings?.default_persona_id,
-    });
-    setSessions((xs) => [s, ...xs]);
-    await selectSession(s);
-    pushLog("new_session", s, false);
-    await probe();
-  }
-
-  async function switchPersona(personaId: string) {
-    if (!session) return;
-    const s = await api.patchSession(session.id, {
-      persona_id: personaId,
-      greeting_index: 0,
-    });
-    setSession(s);
-    setSessions((xs) => xs.map((x) => (x.id === s.id ? s : x)));
-    setGreetingIndex(0);
-    const turns = await api.listTurns(s.id);
-    if (turns.length === 0) {
-      await selectSession(s);
-    }
-  }
-
-  async function swipeGreeting(delta: number) {
-    if (!session) return;
-    const p = personas.find((x) => x.id === session.persona_id) || (await api.getPersona(session.persona_id));
-    const greets = p.greetings?.length ? p.greetings : p.opener ? [p.opener] : [];
-    if (greets.length < 2) return;
-    const next = (greetingIndex + delta + greets.length) % greets.length;
-    setGreetingIndex(next);
-    await api.patchSession(session.id, { greeting_index: next });
-    setMsgs([{ role: "assistant", content: greets[next], source: "opener" }]);
-  }
-
   function startNewPersonaDraft() {
     setPersonaEditId(null);
     setPersonaReadonly(false);
@@ -565,6 +222,7 @@ export default function App() {
     setPersonaDraft({
       name: "",
       description: "",
+      voice: "vertin",
       personality: "",
       scenario: "",
       opener: "",
@@ -582,6 +240,7 @@ export default function App() {
     setPersonaDraft({
       name: p.name,
       description: p.description || "",
+      voice: p.voice ?? "vertin",
       personality: p.personality || "",
       scenario: p.scenario || "",
       opener: p.opener || "",
@@ -600,6 +259,7 @@ export default function App() {
     const body = {
       name: personaDraft.name.trim() || "未命名",
       description: personaDraft.description,
+      voice: personaDraft.voice,
       personality: personaDraft.personality,
       scenario: personaDraft.scenario,
       opener: personaDraft.opener || null,
@@ -629,40 +289,6 @@ export default function App() {
   async function openAtom(key: string) {
     try {
       setAtomDetail(await api.getAtom(key));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  async function createReminder() {
-    if (!session || !remNote.trim()) return;
-    try {
-      if (remRepeat === "once") {
-        if (!remDueLocal) return;
-        const due_at = zonedLocalToUtcIso(remDueLocal, tz);
-        await api.createReminder({ session_id: session.id, note: remNote.trim(), due_at });
-      } else if (remRepeat === "custom") {
-        const cron = remCron.trim();
-        if (!cron) return;
-        await api.createReminder({
-          session_id: session.id,
-          note: remNote.trim(),
-          cron_expr: cron,
-        });
-      } else {
-        if (!remDueLocal) return;
-        const cron_expr = cronFromLocal(remDueLocal, remRepeat);
-        await api.createReminder({
-          session_id: session.id,
-          note: remNote.trim(),
-          cron_expr,
-        });
-      }
-      setRemNote("");
-      setRemDueLocal("");
-      setRemCron("");
-      setRemRepeat("once");
-      await loadReminders(session.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -758,16 +384,6 @@ export default function App() {
 
   const memBase = status?.memory.base_url || settings?.atom_memory_base_url || "http://127.0.0.1:8020";
   const space = status?.memory.space_uid || settings?.memory_space_uid || "";
-  const chatEmpty = msgs.length === 0 || msgs.every((m) => m.source === "opener");
-  const activePersona =
-    personas.find((p) => p.id === session?.persona_id) || null;
-  const greetingCount = activePersona
-    ? (activePersona.greetings?.length
-        ? activePersona.greetings.length
-        : activePersona.opener
-          ? 1
-          : 0)
-    : 0;
   const loreEntries = Array.isArray(personaBook?.entries)
     ? (personaBook.entries as Array<Record<string, unknown>>)
     : [];
@@ -780,8 +396,8 @@ export default function App() {
           <span className="brand-tag">{t("brand.tag")}</span>
         </div>
         <nav className="topbar-nav">
-          <button type="button" className={tab === "chat" ? "active" : ""} onClick={() => setTab("chat")}>
-            {t("nav.chat")}
+          <button type="button" className={tab === "operations" ? "active" : ""} onClick={() => setTab("operations")}>
+            {locale === "zh-CN" ? "运行后台" : locale === "ja" ? "運用ログ" : "Operations"}
           </button>
           <button type="button" className={tab === "memory" ? "active" : ""} onClick={() => setTab("memory")}>
             {t("nav.memory")}
@@ -812,285 +428,11 @@ export default function App() {
               ))}
             </select>
           </label>
-          {tab === "chat" && (
-            <>
-              <button
-                type="button"
-                className={`btn ghost ${scheduleOpen ? "active" : ""}`}
-                onClick={() => setScheduleOpen(true)}
-              >
-                {t("schedule")}
-              </button>
-              <div className="session-menu">
-                {activePersona?.has_avatar && (
-                  <img
-                    className="persona-avatar topbar"
-                    src={api.personaAvatarUrl(activePersona.id)}
-                    alt=""
-                  />
-                )}
-                <select
-                  value={session?.persona_id || ""}
-                  onChange={(e) => void switchPersona(e.target.value)}
-                  aria-label={t("persona")}
-                  title={t("persona.switch")}
-                >
-                  {personas.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={session?.id || ""}
-                  onChange={(e) => {
-                    const s = sessions.find((x) => x.id === e.target.value);
-                    if (s) void selectSession(s);
-                  }}
-                  aria-label={t("session")}
-                >
-                  {sessions.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {sessionLabel(s, tz, locale)}
-                    </option>
-                  ))}
-                </select>
-                <button type="button" className="btn ghost" onClick={() => void newSession()}>
-                  {t("newSession")}
-                </button>
-              </div>
-              <button
-                type="button"
-                className={`btn ghost ${prefsOpen ? "active" : ""}`}
-                onClick={() => setPrefsOpen((v) => !v)}
-              >
-                {t("tone")}
-              </button>
-            </>
-          )}
         </div>
       </header>
 
-      {prefsOpen && tab === "chat" && (
-        <div className="prefs-bar">
-          <label className="warmth-pick">
-            <span>{t("tone.assistant")}</span>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={warmth}
-              onChange={(e) => onWarmthChange(Number(e.target.value))}
-            />
-            <span>{t("tone.warm", { warmth })}</span>
-          </label>
-        </div>
-      )}
-
       <main className="stage">
-        {tab === "chat" && (
-          <div className="chat-stage">
-            <div className="chat-column">
-              {chatEmpty ? (
-                <div className="chat-hero">
-                  <p className="hero-brand">Velora</p>
-                  <h1>{session?.persona_name || settings?.persona_name || t("defaultPersona")}</h1>
-                  <p className="sub">{t("chat.subtitle")}</p>
-                  {greetingCount > 1 && !!msgs.find((m) => m.source === "opener") && (
-                    <div className="greeting-swipe">
-                      <button type="button" className="btn ghost" onClick={() => void swipeGreeting(-1)}>
-                        {t("greeting.previous")}
-                      </button>
-                      <span className="sub">
-                        {t("greeting.count", { current: greetingIndex + 1, total: greetingCount })}
-                      </span>
-                      <button type="button" className="btn ghost" onClick={() => void swipeGreeting(1)}>
-                        {t("greeting.next")}
-                      </button>
-                    </div>
-                  )}
-                  {msgs
-                    .filter((m) => m.source === "opener")
-                    .map((m, i) => (
-                      <p key={i} className="opener-preview">
-                        {m.content}
-                      </p>
-                    ))}
-                </div>
-              ) : (
-                <>
-                  <div className="chat-head">
-                    <h1>{session?.persona_name || settings?.persona_name || t("defaultPersona")}</h1>
-                  </div>
-                  {memHint && (
-                    <div className="mem-hint">
-                      <div className="mem-hint-body">
-                        <span>{memHint}</span>
-                        {recallItems.length > 0 && (
-                          <div className="recall-items">
-                            <span className="recall-caption">{t("memory.recalled")}</span>
-                            {recallItems.map((item) => (
-                              <div className="recall-item" key={item.key}>
-                                <span>{item.statement}</span>
-                                <div className="recall-actions">
-                                  <button
-                                    type="button"
-                                    className="btn ghost compact"
-                                    onClick={() => {
-                                      setTab("memory");
-                                      void openAtom(item.key);
-                                    }}
-                                  >
-                                    {t("view")}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn ghost compact"
-                                    onClick={() => {
-                                      setCorrection(`关于「${item.statement}」：实际是 `);
-                                      setTab("memory");
-                                      void refreshMemory();
-                                    }}
-                                  >
-                                    {t("correct")}
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      <button type="button" className="btn ghost" onClick={() => setMemHint(null)}>
-                        {t("close")}
-                      </button>
-                    </div>
-                  )}
-                  <div className="messages">
-                    {msgs
-                      .filter(visibleChatMsg)
-                      .map((m, i) => {
-                        const timeLabel = formatMsgTime(m.created_at, tz, locale);
-                        const segs =
-                          m.role === "assistant" && !m.streaming
-                            ? displayParagraphs(m.content || "")
-                            : [];
-                        const useSegs = segs.length > 1;
-                        if (useSegs) {
-                          return (
-                            <div key={m.id || i} className="bubble-group">
-                              {isReminderMsg(m) && <span className="tag-reminder">{t("reminder")}</span>}
-                              {segs.map((seg, si) => (
-                                <div
-                                  key={`${m.id || i}-${si}`}
-                                  className={`bubble assistant seg${isReminderMsg(m) ? " reminder" : ""}`}
-                                >
-                                  {seg}
-                                </div>
-                              ))}
-                              {!!m.attachments?.length && session && (
-                                <div className="attach-list">
-                                  {m.attachments.map((a) => {
-                                    const href = api.workspaceFileUrl(session.id, a.path);
-                                    if (a.kind === "image") {
-                                      return (
-                                        <a
-                                          key={a.path}
-                                          className="attach-card image"
-                                          href={href}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                        >
-                                          <img src={href} alt={a.name} />
-                                          <span>
-                                            {a.name} · {formatBytes(a.bytes)}
-                                          </span>
-                                        </a>
-                                      );
-                                    }
-                                    return (
-                                      <a
-                                        key={a.path}
-                                        className="attach-card"
-                                        href={href}
-                                        download={a.name}
-                                      >
-                                        <strong>{a.name}</strong>
-                                        <span>{formatBytes(a.bytes)}</span>
-                                      </a>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                              {timeLabel && <time className="bubble-time">{timeLabel}</time>}
-                            </div>
-                          );
-                        }
-                        return (
-                        <div
-                          key={m.id || i}
-                          className={`bubble ${m.role}${isReminderMsg(m) ? " reminder" : ""}`}
-                        >
-                          {isReminderMsg(m) && <span className="tag-reminder">{t("reminder")}</span>}
-                          {m.content || (m.streaming ? "…" : "")}
-                          {!!m.attachments?.length && session && (
-                            <div className="attach-list">
-                              {m.attachments.map((a) => {
-                                const href = api.workspaceFileUrl(session.id, a.path);
-                                if (a.kind === "image") {
-                                  return (
-                                    <a
-                                      key={a.path}
-                                      className="attach-card image"
-                                      href={href}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                    >
-                                      <img src={href} alt={a.name} />
-                                      <span>
-                                        {a.name} · {formatBytes(a.bytes)}
-                                      </span>
-                                    </a>
-                                  );
-                                }
-                                return (
-                                  <a key={a.path} className="attach-card" href={href} download={a.name}>
-                                    <strong>{a.name}</strong>
-                                    <span>{formatBytes(a.bytes)}</span>
-                                  </a>
-                                );
-                              })}
-                            </div>
-                          )}
-                          {timeLabel && <time className="bubble-time">{timeLabel}</time>}
-                        </div>
-                        );
-                      })}
-                    <div ref={bottomRef} />
-                  </div>
-                </>
-              )}
-              {error && <div className="error">{error}</div>}
-              <div className="composer">
-                <textarea
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder={t("composer.placeholder")}
-                  rows={2}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void send();
-                    }
-                  }}
-                />
-                <button type="button" disabled={busy || !input.trim()} onClick={() => void send()}>
-                  {t("send")}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
+        {tab === "operations" && <Operations locale={locale} />}
         {tab === "persona" && (
           <div className="persona-stage">
             <div className="persona-layout">
@@ -1131,7 +473,7 @@ export default function App() {
                   {personas.map((p) => {
                     const active =
                       personaEditId === p.id ||
-                      (!personaEditId && p.id === session?.persona_id);
+                      (!personaEditId && p.id === settings?.default_persona_id);
                     const sourceLabel =
                       p.source === "builtin"
                         ? t("persona.builtin")
@@ -1161,7 +503,7 @@ export default function App() {
                             <em>
                               {sourceLabel}
                               {p.readonly ? ` · ${t("persona.readonly")}` : ""}
-                              {p.id === session?.persona_id ? ` · ${t("persona.current")}` : ""}
+                              {p.id === settings?.default_persona_id ? ` · ${t("persona.current")}` : ""}
                               {p.id === settings?.default_persona_id ? ` · ${t("persona.default")}` : ""}
                             </em>
                           </span>
@@ -1186,12 +528,12 @@ export default function App() {
                     <button
                       type="button"
                       className="btn ghost"
-                      disabled={!session || !personaEditId}
+                      disabled={!personaEditId}
                       onClick={() => {
-                        if (personaEditId) void switchPersona(personaEditId);
+                        if (personaEditId) void api.updateSettings({ default_persona_id: personaEditId }).then(setSettings);
                       }}
                     >
-                      {t("persona.useCurrent")}
+                      {locale === "zh-CN" ? "设为默认人格" : "Set as default"}
                     </button>
                     <button
                       type="button"
@@ -1270,6 +612,17 @@ export default function App() {
 
                   <div className="persona-field-group">
                     <h3 className="persona-group-title">{t("persona.profile")}</h3>
+                    <label>
+                      {locale === "zh-CN" ? "声音" : "Voice"} · CosyVoice
+                      <select value={personaDraft.voice} onChange={(event) =>
+                        setPersonaDraft((draft) => ({ ...draft, voice: event.target.value }))
+                      }>
+                        <option value="none">{locale === "zh-CN" ? "无语音" : "No voice"}</option>
+                        {["Vertin", "Lilya", "Sonetto", "Regulus"].map((voice) =>
+                          <option key={voice} value={voice.toLowerCase()}>{voice}</option>
+                        )}
+                      </select>
+                    </label>
                     <label>
                       {t("persona.description")}
                       <span className="field-hint">{t("persona.descriptionHint")}</span>
@@ -1937,105 +1290,10 @@ export default function App() {
         )}
       </main>
 
-      {scheduleOpen && (
-        <>
-          <button
-            type="button"
-            className="drawer-backdrop"
-            aria-label={t("schedule.closeAria")}
-            onClick={() => setScheduleOpen(false)}
-          />
-          <aside className="drawer">
-            <div className="drawer-head">
-              <h1>{t("schedule.title")}</h1>
-              <button type="button" className="btn ghost" onClick={() => setScheduleOpen(false)}>
-                {t("close")}
-              </button>
-            </div>
-            <p className="sub">
-              {t("schedule.subtitle", { tz })}
-            </p>
-            <div className="form rem-form">
-              <label>
-                {t("schedule.note")}
-                <input value={remNote} onChange={(e) => setRemNote(e.target.value)} placeholder={t("schedule.notePlaceholder")} />
-              </label>
-              <label>
-                {t("schedule.repeat")}
-                <select
-                  value={remRepeat}
-                  onChange={(e) =>
-                    setRemRepeat(
-                      e.target.value as "once" | "daily" | "weekdays" | "weekly" | "custom",
-                    )
-                  }
-                >
-                  <option value="once">{t("schedule.once")}</option>
-                  <option value="daily">{t("schedule.daily")}</option>
-                  <option value="weekdays">{t("schedule.weekdays")}</option>
-                  <option value="weekly">{t("schedule.weekly")}</option>
-                  <option value="custom">{t("schedule.custom")}</option>
-                </select>
-              </label>
-              {remRepeat !== "custom" && (
-                <label>
-                  {remRepeat === "once" ? t("schedule.time") : t("schedule.firstTime")}
-                  <input
-                    type="datetime-local"
-                    value={remDueLocal}
-                    onChange={(e) => setRemDueLocal(e.target.value)}
-                  />
-                </label>
-              )}
-              {remRepeat === "custom" && (
-                <label>
-                  Cron（五段）
-                  <input
-                    value={remCron}
-                    onChange={(e) => setRemCron(e.target.value)}
-                    placeholder="0 9 * * 1-5"
-                  />
-                </label>
-              )}
-              <button
-                type="button"
-                className="btn"
-                disabled={
-                  !remNote.trim() || (remRepeat === "custom" ? !remCron.trim() : !remDueLocal)
-                }
-                onClick={() => void createReminder()}
-              >
-                {t("schedule.create")}
-              </button>
-            </div>
-            <ul className="rem-list">
-              {reminders.length === 0 && <li className="sub">{t("schedule.empty")}</li>}
-              {reminders.map((r) => (
-                <li key={r.id}>
-                  <div>
-                    <strong>{r.note}</strong>
-                    <div className="meta">
-                      {t("schedule.next", { time: formatInTz(r.due_at, tz) })}
-                      {r.schedule_kind === "cron" && r.cron_expr
-                        ? t("schedule.recurring", { cron: r.cron_expr })
-                        : t("schedule.oneOff")}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="btn ghost"
-                    onClick={() =>
-                      void api.cancelReminder(r.id).then(() => session && loadReminders(session.id))
-                    }
-                  >
-                    {t("cancel")}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </aside>
-        </>
-      )}
     </div>
   );
+}
+
+export default function App() {
+  return <AuthGate><WorkspaceApp /></AuthGate>;
 }

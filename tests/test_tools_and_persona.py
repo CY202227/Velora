@@ -298,7 +298,7 @@ async def test_llm_tool_loop_final_text(store: ConversationStore) -> None:
 
     ctx.emit = emit
 
-    node = LLMNode(provider, tools=reg, max_tool_rounds=4)  # type: ignore[arg-type]
+    node = LLMNode(provider, tools=reg, context_window=32000)  # type: ignore[arg-type]
     result = await node.process(ctx)
     assert result is NodeResult.CONTINUE
     assert ctx.assistant_text == "现在是测试时间。"
@@ -357,7 +357,7 @@ async def test_llm_plain_reply_single_stream_with_tools() -> None:
             tokens.append(ev.data.get("text") or "")
 
     ctx.emit = emit
-    node = LLMNode(provider, tools=reg, max_tool_rounds=4)  # type: ignore[arg-type]
+    node = LLMNode(provider, tools=reg, context_window=32000)  # type: ignore[arg-type]
     assert await node.process(ctx) is NodeResult.CONTINUE
     assert ctx.assistant_text == "你好呀"
     assert provider.calls == 1

@@ -21,6 +21,10 @@ async def execute_tool(
     spec = registry.get(name)
     if spec is None or spec.handler is None:
         return json.dumps({"ok": False, "error": f"unknown tool: {name}"})
+    if "tools" in ctx.extras:
+        allowed = {(item.get("function") or {}).get("name") for item in ctx.extras["tools"] if isinstance(item, dict)}
+        if name not in allowed:
+            return json.dumps({"ok": False, "error": f"tool is not enabled for this turn: {name}"})
     if isinstance(arguments, str):
         try:
             args = json.loads(arguments) if arguments.strip() else {}

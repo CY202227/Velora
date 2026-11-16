@@ -35,13 +35,34 @@ class PublicMemory:
         self.engine.dispose()
 
 
+def ingest_public_sources(client, uid, sample, *, source_turns=6):
+    """Keep evidence numbering stable across installed ingestion-helper versions."""
+    from atom_memory.eval.locomo import iter_sessions, format_session_content
+    if source_turns < 1:
+        raise ValueError("source_turns must be positive")
+    identifiers = []
+    for session, timestamp, turns in iter_sessions(sample.conversation):
+        for chunk, start in enumerate(range(0, len(turns), source_turns)):
+            content = format_session_content(turns[start:start + source_turns], date_time=timestamp)
+            if not content.strip():
+                continue
+            response = client.post(f"/spaces/{uid}/sources", json={
+                "kind": "turn", "content": content, "salience": 0.2,
+                "external_ref": {"system": "locomo", "sample_id": sample.sample_id,
+                                 "session": session, "chunk": chunk},
+            })
+            response.raise_for_status()
+            identifiers.append(int(response.json()["id"]))
+    return identifiers
+
+
 def restore_public_memory(dataset: Path, snapshot_path: Path, llm) -> PublicMemory:
     from fastapi.testclient import TestClient
     from sqlalchemy.pool import StaticPool
     from sqlmodel import Session, SQLModel, create_engine
     from atom_memory.api.deps import get_llm, require_api_key
     from atom_memory.db import get_session
-    from atom_memory.eval.locomo import load_locomo, ingest_locomo_sample
+    from atom_memory.eval.locomo import load_locomo
     from atom_memory.main import app
     from atom_memory.models import Atom, AtomKind, AtomStatus, AtomLinkKind, Source, SourceStatus, RevisionTrigger
     from atom_memory.repositories import revision_repo, evidence_repo, atom_link_repo
@@ -61,7 +82,7 @@ def restore_public_memory(dataset: Path, snapshot_path: Path, llm) -> PublicMemo
     client = TestClient(app)
     try:
         space = client.post("/spaces", json={"owner_id": "public-pilot", "subject_id": sample.sample_id}).json()
-        ingest_locomo_sample(client, space["uid"], sample, salience=0.2, source_turns=6)
+        ingest_public_sources(client, space["uid"], sample)
         with Session(engine) as session:
             by_key = {}
             for atom in snapshot["atoms"]:

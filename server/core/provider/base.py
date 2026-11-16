@@ -14,10 +14,32 @@ class ToolCall:
     arguments: str  # raw JSON string from model
 
 
+@dataclass(frozen=True)
+class TokenUsage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_input_tokens: int = 0
+
+    @classmethod
+    def from_payload(cls, value: Any) -> TokenUsage | None:
+        if not isinstance(value, dict):
+            return None
+        def number(raw):
+            return raw if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0 else 0
+        details = value.get("prompt_tokens_details") or value.get("input_tokens_details") or {}
+        return cls(
+            number(value.get("prompt_tokens", value.get("input_tokens"))),
+            number(value.get("completion_tokens", value.get("output_tokens"))),
+            number(details.get("cached_tokens")) if isinstance(details, dict) else 0,
+        )
+
+
 @dataclass
 class ChatResult:
     content: str | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)
+    usage: TokenUsage | None = None
+    finish_reason: str | None = None
 
 
 @dataclass
@@ -67,4 +89,5 @@ class ChatProvider(Protocol):
         model: str,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        max_output_tokens: int | None = None,
     ) -> ChatResult: ...

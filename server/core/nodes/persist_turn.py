@@ -71,6 +71,7 @@ class PersistTurnNode:
             ctx.session_id, None if proactive else ctx.request.user_text,
             ctx.assistant_text, source=source, attachments=attachments,
             memory_uid=ctx.memory_space_uid, memory_payload=payload,
+            operation_id=ctx.agent_run.run_id if ctx.agent_run is not None else None,
         )
         ctx.turn_id = asst_turn.id
         ctx.extras["attachments"] = attachments

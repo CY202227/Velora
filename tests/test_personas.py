@@ -283,6 +283,8 @@ async def test_personas_api_import_json(tmp_path: Path, monkeypatch) -> None:
     db = (tmp_path / "api.db").as_posix()
     monkeypatch.setenv("VELORA_DATABASE_URL", f"sqlite+aiosqlite:///{db}")
     monkeypatch.setenv("VELORA_START_MEMORY_SIDECAR", "false")
+    monkeypatch.setenv("VELORA_MEMORY_REQUIRED", "false")
+    monkeypatch.setenv("VELORA_CONTROL_TOKEN_PATH", str(tmp_path / "control.token"))
     # recreate settings
     from server import config as config_mod
 
@@ -294,6 +296,7 @@ async def test_personas_api_import_json(tmp_path: Path, monkeypatch) -> None:
     async with AsyncClient(transport=transport, base_url="http://t") as client:
         # lifespan
         async with app.router.lifespan_context(app):
+            client.headers["X-Velora-Token"] = app.state.velora.control_token
             listed = await client.get("/api/personas")
             assert listed.status_code == 200
             assert any(p["id"] == BUILTIN_PERSONA_ID for p in listed.json())

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
+from typing import Literal
 from typing import Any
 
 import httpx
@@ -32,7 +33,11 @@ router = APIRouter(prefix="/api/personas", tags=["personas"])
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 
+Voice = Literal["vertin", "lilya", "sonetto", "regulus", "none"]
+
+
 class PersonaOut(BaseModel):
+    voice: Voice = "vertin"
     id: str
     name: str
     system_prompt: str
@@ -58,6 +63,7 @@ class PersonaOut(BaseModel):
 
 
 class PersonaWrite(BaseModel):
+    voice: Voice | None = None
     name: str
     description: str = ""
     personality: str = ""
@@ -99,6 +105,7 @@ def _persona_out(p: Persona, *, created_at: str | None = None, updated_at: str |
         skill_names=p.skill_names,
         source=p.source,
         description=p.description or "",
+        voice=(p.import_meta or {}).get("velora_voice", "vertin"),
         personality=p.personality or "",
         scenario=p.scenario or "",
         post_history_instructions=p.post_history_instructions or "",
@@ -181,9 +188,10 @@ def _from_write(body: PersonaWrite, *, persona_id: str, source: str) -> Persona:
         character_book=body.character_book,
         avatar_url=(body.avatar_url or None),
         avatar_path=None,
-        import_meta={"mes_example_raw": body.mes_example}
-        if body.mes_example
-        else None,
+        import_meta={
+            **({"mes_example_raw": body.mes_example} if body.mes_example else {}),
+            **({"velora_voice": body.voice} if body.voice is not None else {}),
+        } or None,
     )
 
 
@@ -214,6 +222,7 @@ async def update_persona(
     if existing is None:
         raise HTTPException(404, "persona not found")
     persona = _from_write(body, persona_id=persona_id, source=existing.source)
+    persona.import_meta = {**(existing.import_meta or {}), **(persona.import_meta or {})} or None
     persona.avatar_path = existing.avatar_path
     if body.avatar_url is not None:
         persona.avatar_url = body.avatar_url

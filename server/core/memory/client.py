@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from urllib.parse import urlparse
 from typing import Any
 
 import httpx
@@ -35,11 +36,15 @@ class AtomMemoryClient:
             headers["X-API-Key"] = self.api_key
         return headers
 
+    def _client(self, **kwargs):
+        local = (urlparse(self.base_url).hostname or "").lower() in ("127.0.0.1", "localhost", "::1")
+        return httpx.AsyncClient(trust_env=not local, **kwargs)
+
     async def ensure_space(self, uid: str, *, owner_id: str = "velora") -> dict[str, Any]:
         """Idempotent: create space if missing. Safe to call every turn."""
         if uid in self._ready:
             return {"uid": uid}
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with self._client(timeout=self.timeout) as client:
             resp = await client.post(
                 f"{self.base_url}/spaces",
                 headers=self._headers(),
@@ -93,7 +98,7 @@ class AtomMemoryClient:
             "neighbor_hops": neighbor_hops,
         }
         try:
-            async with httpx.AsyncClient(timeout=self.consolidate_timeout if method == "llm" else self.timeout) as client:
+            async with self._client(timeout=self.consolidate_timeout if method == "llm" else self.timeout) as client:
                 resp = await client.post(
                     f"{self.base_url}/spaces/{uid}/recall",
                     headers=self._headers(),
@@ -144,7 +149,7 @@ class AtomMemoryClient:
         if not await self._ensure_or_bust(uid):
             return None
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with self._client(timeout=self.timeout) as client:
                 resp = await client.post(
                     f"{self.base_url}/spaces/{uid}/sources",
                     headers=self._headers(),
@@ -173,7 +178,7 @@ class AtomMemoryClient:
         if max_sources is not None:
             payload["max_sources"] = max_sources
         try:
-            async with httpx.AsyncClient(timeout=self.consolidate_timeout) as client:
+            async with self._client(timeout=self.consolidate_timeout) as client:
                 resp = await client.post(
                     f"{self.base_url}/spaces/{uid}/consolidate",
                     headers=self._headers(),
@@ -218,7 +223,7 @@ class AtomMemoryClient:
         if not await self._ensure_or_bust(uid):
             return None
         try:
-            async with httpx.AsyncClient(timeout=self.consolidate_timeout) as client:
+            async with self._client(timeout=self.consolidate_timeout) as client:
                 resp = await client.post(
                     f"{self.base_url}/spaces/{uid}/{path}",
                     headers=self._headers(),
@@ -250,7 +255,7 @@ class AtomMemoryClient:
         params: dict[str, Any] = {"page": page, "page_size": page_size}
         if kind:
             params["kind"] = kind
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with self._client(timeout=self.timeout) as client:
             resp = await client.get(
                 f"{self.base_url}/spaces/{uid}/atoms",
                 headers=self._headers(),
@@ -271,7 +276,7 @@ class AtomMemoryClient:
         self, uid: str, key: str, *, include: str = "revisions,evidence"
     ) -> dict[str, Any]:
         await self.ensure_space(uid)
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with self._client(timeout=self.timeout) as client:
             resp = await client.get(
                 f"{self.base_url}/spaces/{uid}/atoms/{key}",
                 headers=self._headers(),
@@ -281,7 +286,7 @@ class AtomMemoryClient:
             return resp.json()
 
     async def health(self) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with self._client(timeout=5.0) as client:
             resp = await client.get(
                 f"{self.base_url}/health", headers=self._headers()
             )
@@ -290,7 +295,7 @@ class AtomMemoryClient:
 
     async def archive_atom(self, uid: str, key: str) -> dict[str, Any]:
         await self.ensure_space(uid)
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with self._client(timeout=self.timeout) as client:
             resp = await client.post(
                 f"{self.base_url}/spaces/{uid}/atoms/{key}/archive",
                 headers=self._headers(),
@@ -301,7 +306,7 @@ class AtomMemoryClient:
 
     async def get_source(self, uid: str, source_id: int) -> dict[str, Any] | None:
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with self._client(timeout=self.timeout) as client:
                 # atom-memory exposes the source collection but not a
                 # single-source endpoint. Filter locally so delivery retry
                 # remains compatible with the HTTP contract.
@@ -327,7 +332,7 @@ class AtomMemoryClient:
     ) -> dict[str, Any] | None:
         """Find a previously delivered source without requiring a new API endpoint."""
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with self._client(timeout=self.timeout) as client:
                 response = await client.get(
                     f"{self.base_url}/spaces/{uid}/sources",
                     headers=self._headers(),
@@ -398,7 +403,7 @@ class AtomMemoryClient:
 
     async def expand(self, uid: str, keys: list[str], *, budget_chars: int = 1200) -> dict[str, Any]:
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with self._client(timeout=self.timeout) as client:
                 response = await client.post(f"{self.base_url}/spaces/{uid}/atoms/expand",
                     headers=self._headers(), json={"keys": keys, "budget_chars": budget_chars, "with_evidence": True})
                 response.raise_for_status()
@@ -409,7 +414,7 @@ class AtomMemoryClient:
 
     async def search_sources(self, uid: str, query: str, *, budget_chars: int = 2400, method: str = "bm25") -> dict[str, Any]:
         try:
-            async with httpx.AsyncClient(timeout=self.consolidate_timeout if method == "llm" else self.timeout) as client:
+            async with self._client(timeout=self.consolidate_timeout if method == "llm" else self.timeout) as client:
                 response = await client.post(f"{self.base_url}/spaces/{uid}/sources/search",
                     headers=self._headers(), json={"query": query, "max_sources": 4, "budget_chars": budget_chars, "method": method})
                 response.raise_for_status()

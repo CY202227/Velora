@@ -1,3 +1,5 @@
+> 当前产品范围：后端 Agent 服务 + 管理界面。用户聊天页面已移除；对话、取消、恢复接口与 CLI 保留。运行时实现和上线状态请先读 [开发文档](docs/README.md)，不要将合成灰度通过理解为生产全部完成。
+
 # Velora
 
 [![CI](https://github.com/CY202227/Velora/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/CY202227/Velora/actions/workflows/ci.yml)
@@ -52,7 +54,7 @@ flowchart LR
 
 | 状态 | 内容 |
 |---|---|
-| 已实现 | 聊天桌面、会话与 turn 存储、分层记忆召回与来源、记忆纠正入口、上下文压缩、atom-memory 独立服务、本地模型可选侧车、提醒/时间/记忆工具、Docker 双服务启动与 CI 冒烟验证。 |
+| 已实现 | 管理界面、后端对话接口、会话与 turn 存储、分层记忆召回与来源、记忆纠正入口、上下文压缩、atom-memory 独立服务、本地模型可选侧车、提醒/时间/记忆工具、Docker 双服务启动与 CI 冒烟验证。 |
 | 正在规划 | 低频且可控的日常语音触达（TTS）、Notion/Gmail 只读连接器，以及专属沙箱后的受控本地执行。 |
 
 ### 一次消息如何流转
@@ -79,13 +81,13 @@ pyproject.toml
 refs/            local-only checkouts (gitignored)
 ```
 
-Product notes under `docs/` are local-only (gitignored).
+Runtime engineering documents under `docs/` are explicitly included by the repository ignore rules; private local notes remain ignored.
 
-Memory is an **external service** (own repo). Velora talks to it over HTTP (`VELORA_ATOM_MEMORY_BASE_URL`). The `local-default` preset can install and optionally spawn it as a sidecar (still a separate process).
+Memory is a required GitHub-installed dependency. Velora talks to atom-memory over HTTP (`VELORA_ATOM_MEMORY_BASE_URL`) and automatically starts its installed package locally, waiting for readiness before becoming available. Its separate repository and process allow other projects to reuse it.
 
 ## Run
 
-### Recommended: preset + optional sidecar
+### Recommended: automatic local dependencies
 
 ```bash
 python -m venv .venv
@@ -104,9 +106,7 @@ After Desk UI changes: `cd desk && npm run build` (outputs to `server/static`), 
 
 Desk → 设置 → **使用本地小模型（Qwen3.8-4B Distill）** downloads ~2.8GB GGUF + a recent `llama-server` into `velora_data/models/` and `velora_data/bin/`, then serves OpenAI-compatible chat on `127.0.0.1:8040`. Requires a llama.cpp build with Qwen3.5 support (Velora pins a recent release). Closing the toggle restores the previous cloud URL/model. Set `VELORA_START_LOCAL_LLM_SIDECAR=true` only to auto-spawn when files are already present (never auto-downloads).
 
-If sidecar is off, start memory yourself (or keep a checkout under `refs/atom_memory`).
-Sidecar prefers `refs/atom_memory` on `PYTHONPATH` when that checkout exists, so local
-memory updates (layered recall / L2 synthesize / L3 persona) apply without a pip reinstall.
+If automatic startup is explicitly disabled, an externally managed memory service must already be ready. Local source checkouts are used only when explicitly configured with `VELORA_ATOM_MEMORY_PROJECT_DIR`; neither sibling directories nor `refs/atom_memory` override the installed dependency automatically.
 
 ```bash
 cd refs/atom_memory
@@ -163,9 +163,27 @@ docker compose --env-file .env.docker build --no-cache
 docker compose --env-file .env.docker up -d
 ```
 
-若本地使用 `refs/atom_memory`，自动启动仍优先读取这份 checkout，需要在该目录更新源码。若连接的是已启动或远程的记忆服务，则需更新那台服务；Velora 不会在每次启动时自动下载代码。
+默认从 GitHub 安装依赖、启动时运行已安装版本；只有显式设置 `VELORA_ATOM_MEMORY_PROJECT_DIR` 才使用本地源码。若连接已启动或远程的记忆服务，则需更新那台服务；日常启动不重复下载代码。
 
 
 ## 知识库与再次查找
 
 可选 xWiki 接入及 `memory_search` / `memory_expand` 的使用见 [联动说明](docs/wiki-integration.md)。初始短记忆不足时可以再次检索和展开；这不等于召回质量已经验收通过。
+
+## CLI 与运行后台
+
+在后台「角色卡」里设为默认角色。启动 Velora 后，运行 `python scripts/velora_chat.py` 即可连续聊天，输入 `/exit` 退出。新会话自动使用后台设置的默认角色。
+加 `--session <id>` 可继续同一会话。配置 Vertin 后，加 `--tts` 为会话启用语音合成。
+
+在 Velora 根目录克隆 Vertin，重启后会自动发现推理脚本。
+
+```powershell
+git clone --depth 1 https://github.com/CY202227/vertin-cosyvoice3.git velora_data/vertin
+```
+
+也可以在 `.env` 中通过 `VELORA_VERTIN_SCRIPT` 指定已有的 `infer/infer.py`。
+如果 Vertin 使用单独的 Python 环境，再设置 `VELORA_VERTIN_PYTHON` 为该环境的 Python 可执行文件。
+需要提前按 Vertin 的说明准备 CosyVoice3 源码与权重。
+
+打开 Velora 首页可以查看最近 100 条推理记录，服务重启后重新计数。
+Chat 速度取供应商返回的输出 token 数除以请求耗时。Vertin TTS 速度取语音解码器产出的 token 数除以解码耗时，生成的音频可在记录里试听。

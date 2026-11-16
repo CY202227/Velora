@@ -398,6 +398,11 @@ class ConversationStore:
         )
 
     async def init(self) -> None:
+        # Register optional runtime tables independently of application import order.
+        from server.core.agent.store import RunCheckpointModel, RunEventModel
+        from server.core.agent.tasks import TaskRecord, TaskEvent
+        from server.core.execution.store import ExecutionRecord
+        from server.core.execution.approvals import ApprovalRecord
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
             await conn.run_sync(_ensure_columns)
@@ -530,11 +535,12 @@ class ConversationStore:
         attachments: list[dict] | None = None,
         memory_uid: str | None = None,
         memory_payload: dict | None = None,
+        operation_id: str | None = None,
     ) -> tuple[TurnRow, dict | None]:
         """Commit the complete exchange and its memory delivery together."""
         now = _utcnow()
-        user_id = str(uuid.uuid4()) if user_text is not None else None
-        assistant_id = str(uuid.uuid4())
+        user_id = str(uuid.uuid5(uuid.NAMESPACE_URL, operation_id + ":user")) if operation_id and user_text is not None else (str(uuid.uuid4()) if user_text is not None else None)
+        assistant_id = str(uuid.uuid5(uuid.NAMESPACE_URL, operation_id + ":assistant")) if operation_id else str(uuid.uuid4())
         payload = None
         if memory_payload is not None:
             if memory_uid is None:
@@ -551,6 +557,11 @@ class ConversationStore:
             attachments=json.dumps(attachments or [], ensure_ascii=False),
         )
         async with self._session_factory() as db:
+            existing = await db.get(TurnModel, assistant_id) if operation_id else None
+            if existing is not None:
+                if existing.session_id != session_id or existing.content != assistant_text:
+                    raise ValueError("Exchange operation conflicts with previously saved content")
+                return _turn_row(existing), payload
             if user_id is not None:
                 db.add(TurnModel(id=user_id, session_id=session_id, role="user",
                                  content=user_text, created_at=now, source=source, attachments="[]"))

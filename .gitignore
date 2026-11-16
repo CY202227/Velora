@@ -1,5 +1,16 @@
-# Local-only: product notes and reference checkouts (not published)
-docs/
+# Publish selected engineering documents; other local notes stay private.
+docs/*
+!docs/README.md
+!docs/velora-product.md
+!docs/velora-architecture.md
+!docs/agent-runtime-plan.md
+!docs/runtime-development.md
+!docs/runtime-invariants.md
+!docs/runtime-validation.md
+!docs/terminal.md
+!docs/agent-loop-walkthrough.md
+!docs/todo.md
+!docs/execution-architecture.md
 refs/
 
 # Stale path if anyone left a root copy
@@ -13,7 +24,8 @@ __pycache__/
 venv/
 dist/
 build/
-.pytest_cache/
+.pytest*/
+.codex-pytest*/
 .mypy_cache/
 .ruff_cache/
 
@@ -27,6 +39,7 @@ velora_data/
 node_modules/
 desk/dist/
 desk/.vite/
+*.tsbuildinfo
 
 # Legacy nested package path (if leftover)
 todo
@@ -37,3 +50,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Isolated runtime tests and live canary data
+.runtime*/

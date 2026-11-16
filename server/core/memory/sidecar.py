@@ -1,4 +1,4 @@
-"""Optional atom-memory subprocess for the local-default preset."""
+"""Start and own the local memory dependency, or reuse a healthy service."""
 
 from __future__ import annotations
 
@@ -61,22 +61,24 @@ def _is_loopback(url: str) -> bool:
 
 def health_ok(base_url: str, *, timeout: float = 1.5) -> bool:
     try:
-        resp = httpx.get(f"{base_url.rstrip('/')}/health", timeout=timeout)
-        return resp.status_code < 400
+        resp = httpx.get(f"{base_url.rstrip('/')}/health", timeout=timeout, trust_env=not _is_loopback(base_url))
+        return resp.status_code == 200 and resp.json().get("status") == "ok"
     except Exception:
         return False
 
 
-def atom_memory_root() -> Path | None:
-    """Prefer the local refs checkout so sidecar tracks refs/atom_memory."""
-    refs = _ROOT / "refs" / "atom_memory"
-    if (refs / "pyproject.toml").is_file() and (refs / "atom_memory").is_dir():
-        return refs
+def atom_memory_root(project_dir: str = "") -> Path | None:
+    candidates = [Path(project_dir).resolve()] if project_dir else []
+    for candidate in candidates:
+        if (candidate / "pyproject.toml").is_file() and (candidate / "atom_memory").is_dir():
+            return candidate
+    if project_dir:
+        raise RuntimeError("configured atom-memory project directory does not contain the package")
     return None
 
 
-def atom_memory_importable() -> bool:
-    if atom_memory_root() is not None:
+def atom_memory_importable(project_dir: str = "") -> bool:
+    if atom_memory_root(project_dir) is not None:
         return True
     try:
         import atom_memory.main  # noqa: F401
@@ -87,7 +89,7 @@ def atom_memory_importable() -> bool:
 
 
 def start_memory_sidecar(settings: Settings) -> MemorySidecar:
-    """Start atom-memory if configured; never raise for missing package."""
+    """A failed managed dependency prevents default startup; explicit degraded tests may opt out."""
     sidecar = MemorySidecar(base_url=settings.atom_memory_base_url.rstrip("/"))
     if not settings.start_memory_sidecar:
         return sidecar
@@ -111,19 +113,18 @@ def start_memory_sidecar(settings: Settings) -> MemorySidecar:
         logger.info("atom-memory already healthy at %s — skip spawn", base)
         return sidecar
 
-    if not atom_memory_importable():
-        logger.warning(
-            "atom-memory not found; clone to refs/atom_memory "
-            'or pip install -e ".[memory]"'
-        )
+    if not atom_memory_importable(settings.atom_memory_project_dir):
+        if settings.memory_required:
+            raise RuntimeError('atom-memory dependency unavailable; configure its local project directory or install ".[memory]"')
         return sidecar
 
-    host = str(sc_cfg.get("host") or "127.0.0.1")
-    port = int(sc_cfg.get("port") or urlparse(base).port or 8020)
+    address = urlparse(base)
+    if address.scheme != "http" or address.path not in ("", "/"):
+        raise RuntimeError("automatic local memory startup requires a plain HTTP root URL")
+    host = address.hostname
+    port = address.port or 80
     app = str(sc_cfg.get("app") or "atom_memory.main:app")
-    db_url = str(
-        sc_cfg.get("database_url") or "sqlite:///./velora_data/atom_memory.db"
-    )
+    db_url = settings.atom_memory_database_url
     sync_llm = bool(sc_cfg.get("sync_llm_to_memory", True))
 
     (_ROOT / "velora_data").mkdir(parents=True, exist_ok=True)
@@ -135,15 +136,10 @@ def start_memory_sidecar(settings: Settings) -> MemorySidecar:
         env["ATOMMEM_LLM_MODEL"] = settings.llm_model
     if settings.atom_memory_api_key:
         env["ATOMMEM_API_KEY"] = settings.atom_memory_api_key
-    refs_root = atom_memory_root()
+    refs_root = atom_memory_root(settings.atom_memory_project_dir)
     python_exe = sys.executable
     if refs_root is not None:
-        existing = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = (
-            str(refs_root)
-            if not existing
-            else f"{refs_root}{os.pathsep}{existing}"
-        )
+        env["PYTHONPATH"] = str(refs_root)
         logger.info("atom-memory sidecar using local checkout %s", refs_root)
         # Prefer the checkout's own venv so deps match atom-memory.
         for candidate in (
@@ -168,31 +164,30 @@ def start_memory_sidecar(settings: Settings) -> MemorySidecar:
         "info",
     ]
     logger.info("spawning atom-memory sidecar: %s", " ".join(cmd))
-    log_path = _ROOT / "velora_data" / "atom_memory_sidecar.log"
+    log_path = Path(settings.atom_memory_sidecar_log)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        # Keep handle open for process lifetime (closed when Velora exits).
-        log_f = open(log_path, "ab", buffering=0)  # noqa: SIM115
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(_ROOT),
-            env=env,
-            stdout=log_f,
-            stderr=subprocess.STDOUT,
-        )
+        with log_path.open("ab", buffering=0) as log_f:
+            proc = subprocess.Popen(cmd, cwd=str(_ROOT), env=env, stdout=log_f, stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     except Exception:
         logger.exception("failed to spawn atom-memory sidecar")
+        if settings.memory_required:
+            raise RuntimeError(f"could not start atom-memory dependency; inspect {log_path}")
         return sidecar
 
     sidecar._proc = proc
     sidecar.started_by_us = True
-    deadline = time.time() + 20.0
-    while time.time() < deadline:
+    deadline = time.monotonic() + settings.atom_memory_startup_timeout_seconds
+    while time.monotonic() < deadline:
         if proc.poll() is not None:
             logger.error(
                 "atom-memory sidecar exited early with code %s", proc.returncode
             )
             sidecar._proc = None
             sidecar.started_by_us = False
+            if settings.memory_required:
+                raise RuntimeError(f"atom-memory dependency exited during startup; inspect {log_path}")
             return sidecar
         if health_ok(base, timeout=1.0):
             logger.info("atom-memory sidecar ready at %s", base)
@@ -200,4 +195,7 @@ def start_memory_sidecar(settings: Settings) -> MemorySidecar:
         time.sleep(0.25)
 
     logger.warning("atom-memory sidecar spawn timed out waiting for /health")
+    sidecar.stop()
+    if settings.memory_required:
+        raise RuntimeError(f"atom-memory dependency startup timed out; inspect {log_path}")
     return sidecar
