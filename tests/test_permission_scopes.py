@@ -33,16 +33,18 @@ def test_private_state_cannot_be_granted(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_scoped_request_always_requires_confirmation_context(tmp_path, monkeypatch):
+@pytest.mark.parametrize("platform,reason", [("win32", "approval_unavailable"), ("linux", "permission_denied")])
+async def test_scoped_request_always_requires_confirmation_context(tmp_path, monkeypatch, platform, reason):
     outside = tmp_path / "docs"
     outside.mkdir()
     s = Settings(_env_file=None, computer_enabled=True, execution_read_allowlist=[str(outside)])
     effect = AsyncMock()
     monkeypatch.setattr("server.core.execution.service._execute", effect)
-    result = json.loads(await execute(s, "s", "read_file", {"path": str(outside), "permissions": {
-        "read_paths": [str(outside)], "reason": "read documentation",
-    }}))
-    assert result["reason"] == "approval_unavailable"
+    with patch("server.core.execution.permissions.sys.platform", platform):
+        result = json.loads(await execute(s, "s", "read_file", {"path": str(outside), "permissions": {
+            "read_paths": [str(outside)], "reason": "read documentation",
+        }}))
+    assert result["reason"] == reason
     effect.assert_not_awaited()
 
 
@@ -70,11 +72,13 @@ def test_host_access_needs_admin_auth_and_cannot_claim_restricted_scope():
 
 
 @pytest.mark.asyncio
-async def test_host_access_without_grant_never_launches(monkeypatch):
+@pytest.mark.parametrize("platform,reason", [("win32", "approval_unavailable"), ("linux", "permission_denied")])
+async def test_host_access_without_grant_never_launches(monkeypatch, platform, reason):
     effect = AsyncMock()
     monkeypatch.setattr("server.core.execution.service._execute", effect)
-    result = json.loads(await execute(Settings(_env_file=None, computer_enabled=True, execution_allow_host=True), "s", "run_python", {
-        "code": "print(1)", "permissions": {"host_access": True, "reason": "trusted code"},
-    }))
-    assert result["reason"] == "approval_unavailable"
+    with patch("server.core.execution.permissions.sys.platform", platform):
+        result = json.loads(await execute(Settings(_env_file=None, computer_enabled=True, execution_allow_host=True), "s", "run_python", {
+            "code": "print(1)", "permissions": {"host_access": True, "reason": "trusted code"},
+        }))
+    assert result["reason"] == reason
     effect.assert_not_awaited()
