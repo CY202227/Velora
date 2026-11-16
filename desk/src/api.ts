@@ -105,6 +105,7 @@ export type Persona = {
   character_book?: Record<string, unknown> | null;
   avatar_url?: string | null;
   has_avatar: boolean;
+  voice?: string;
   import_meta?: Record<string, unknown> | null;
   readonly?: boolean;
 };
@@ -112,6 +113,7 @@ export type Persona = {
 export type PersonaWrite = {
   name: string;
   description?: string;
+  voice?: string;
   personality?: string;
   scenario?: string;
   system_prompt?: string | null;

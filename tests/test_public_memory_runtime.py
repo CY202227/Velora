@@ -31,3 +31,22 @@ def test_snapshot_cannot_attach_receipts_to_a_different_dataset(tmp_path):
     dataset.write_text(dataset.read_text(encoding='utf-8')+'\n',encoding='utf-8')
     with pytest.raises(ValueError,match='exact original'):
         restore_public_memory(dataset,snapshot,object())
+
+
+def test_public_source_chunking_preserves_evidence_ids():
+    from types import SimpleNamespace
+    import httpx
+    from scripts.memory_eval_runtime import ingest_public_sources
+    calls = []
+    def handle(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, json={"id": len(calls)})
+    sample = SimpleNamespace(sample_id="public", conversation={
+        "session_1_date_time": "8 May 2023",
+        "session_1": [{"speaker": "Alice", "dia_id": f"D1:{i}", "text": f"fact-{i}"} for i in range(1, 8)],
+    })
+    with httpx.Client(base_url="http://test", transport=httpx.MockTransport(handle)) as client:
+        assert ingest_public_sources(client, "space", sample) == [1, 2]
+    assert "fact-6" in calls[0]["content"] and "fact-7" not in calls[0]["content"]
+    assert "fact-7" in calls[1]["content"]
+    assert calls[1]["external_ref"]["chunk"] == 1

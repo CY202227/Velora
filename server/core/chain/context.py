@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
+
+if TYPE_CHECKING:
+    from server.core.agent.state import RunState
 
 from server.core.chain.types import StreamEvent, TurnRequest
 from server.core.persona.default import Persona
@@ -35,6 +38,12 @@ class TurnContext:
     stop_reason: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
     emit: EmitFn | None = None
+    agent_run: RunState | None = None
+    checkpoint: Callable[[str], Awaitable[None]] | None = None
+
+    async def save_checkpoint(self, boundary: str) -> None:
+        if self.checkpoint is not None:
+            await self.checkpoint(boundary)
 
     async def publish(self, event_type: str, data: dict[str, Any] | None = None) -> None:
         if self.emit is not None:

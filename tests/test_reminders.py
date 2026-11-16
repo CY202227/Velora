@@ -264,7 +264,9 @@ async def test_chat_shortcut_creates_reminder(store: ConversationStore) -> None:
     app = FastAPI()
     app.include_router(chat_api.router)
     app.include_router(reminders_api.router)
-    app.state.velora = SimpleNamespace(settings=settings, store=store, router=router)
+    from server.core.agent.tasks import TaskService
+    app.state.velora = SimpleNamespace(settings=settings, store=store, router=router,
+        tasks=TaskService(store._session_factory, router, settings))
 
     sess = await store.create_session(persona_id="p", memory_space_uid="u", model="m")
     transport = ASGITransport(app=app)

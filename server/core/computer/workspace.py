@@ -13,12 +13,14 @@ class WorkspaceError(ValueError):
 
 
 def workspace_root(workspaces_dir: str | Path, session_id: str) -> Path:
-    if not _SAFE_SESSION.match(session_id or ""):
-        # UUID is safe; sanitize otherwise
-        sid = re.sub(r"[^A-Za-z0-9._-]", "_", session_id or "unknown")[:80]
-    else:
-        sid = session_id
-    root = (Path(workspaces_dir) / sid).resolve()
+    if not _SAFE_SESSION.fullmatch(session_id or "") or session_id in (".", ".."):
+        raise WorkspaceError("invalid session workspace identifier")
+    candidate = Path(workspaces_dir) / session_id
+    if candidate.is_symlink() or (hasattr(candidate, "is_junction") and candidate.is_junction()):
+        raise WorkspaceError("session workspace links are not allowed")
+    root = candidate.resolve()
+    if not root.is_relative_to(Path(workspaces_dir).resolve()) or root == Path(workspaces_dir).resolve():
+        raise WorkspaceError("session workspace escapes workspace directory")
     root.mkdir(parents=True, exist_ok=True)
     return root
 

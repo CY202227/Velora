@@ -4,18 +4,21 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import AsyncExitStack
+from time import perf_counter
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 
+from server.core.inference_log import record
 from server.core.local_llm.manifest import (
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_K,
     DEFAULT_TOP_P,
 )
 from server.core.local_llm.think import ThinkStreamFilter, strip_think
-from server.core.provider.base import ChatResult, StreamEvent, ToolCall
+from server.core.provider.base import ChatResult, StreamEvent, ToolCall, TokenUsage
 
 logger = logging.getLogger(__name__)
 
@@ -91,12 +94,58 @@ class OpenAICompatProvider:
         timeout: float = 120.0,
         strip_think_blocks: bool = True,
         use_local_sampling: bool = False,
+        max_output_tokens: int | None = None,
+        token_count_path: str | None = None,
     ) -> None:
+        if token_count_path is not None and (not token_count_path.startswith("/") or token_count_path.startswith("//") or ":" in token_count_path or "?" in token_count_path or "#" in token_count_path):
+            raise ValueError("token_count_path must be a same-service relative path")
+        self.token_count_path = token_count_path
+        self.max_output_tokens = max_output_tokens
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
         self.strip_think_blocks = strip_think_blocks
         self.use_local_sampling = use_local_sampling
+
+    async def count_input_tokens(self, messages, *, model, tools=None) -> int | None:
+        """Optional chat-template counting endpoint using model/messages/tools input."""
+        if self.token_count_path is None:
+            return None
+        payload = {"model": model, "messages": messages}
+        if tools:
+            payload["tools"] = tools
+        try:
+            async with httpx.AsyncClient(timeout=min(self.timeout, 10)) as client:
+                response = await client.post(self.base_url + self.token_count_path, headers=self._headers(), json=payload)
+                response.raise_for_status()
+                body = response.json()
+            value = body.get("count", body.get("input_tokens"))
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                return value
+        except (httpx.HTTPError, ValueError, AttributeError):
+            pass
+        return None
+
+    async def context_window(self, model: str) -> int | None:
+        """Read optional deployment metadata; standard model APIs may omit capacity."""
+        from urllib.parse import quote
+        try:
+            async with httpx.AsyncClient(timeout=min(self.timeout, 5)) as client:
+                response = await client.get(f"{self.base_url}/models/{quote(model, safe='')}", headers=self._headers())
+                if response.status_code in {404, 405}:
+                    response = await client.get(f"{self.base_url}/models", headers=self._headers())
+                    response.raise_for_status()
+                    data = next((item for item in response.json().get("data", []) if item.get("id") == model), {})
+                else:
+                    response.raise_for_status()
+                    data = response.json()
+            for key in ("context_window", "max_model_len", "max_context_length"):
+                value = data.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                    return value
+        except (httpx.HTTPError, ValueError, AttributeError):
+            pass
+        return None
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -134,6 +183,7 @@ class OpenAICompatProvider:
         model: str,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        max_output_tokens: int | None = None,
     ) -> ChatResult:
         """Non-streaming completion; optionally with tools / tool_calls."""
         url = f"{self.base_url}/chat/completions"
@@ -142,10 +192,15 @@ class OpenAICompatProvider:
             "messages": messages,
             "stream": False,
         }
+        if self.max_output_tokens is not None:
+            payload["max_tokens"] = self.max_output_tokens
+        if max_output_tokens is not None:
+            payload["max_tokens"] = max_output_tokens
         self._maybe_sampling(payload)
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice if tool_choice is not None else "auto"
+        started = perf_counter()
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.post(url, headers=self._headers(), json=payload)
             if resp.status_code >= 400:
@@ -155,6 +210,7 @@ class OpenAICompatProvider:
                     response=resp,
                 )
             obj = resp.json()
+        record("chat", model, perf_counter() - started, (obj.get("usage") or {}).get("completion_tokens"))
         choices = obj.get("choices") or []
         if not choices:
             return ChatResult()
@@ -166,6 +222,8 @@ class OpenAICompatProvider:
         return ChatResult(
             content=content,
             tool_calls=_parse_tool_calls(message.get("tool_calls")),
+            usage=TokenUsage.from_payload(obj.get("usage")),
+            finish_reason=choices[0].get("finish_reason"),
         )
 
     async def stream_chat(
@@ -187,6 +245,8 @@ class OpenAICompatProvider:
             "messages": messages,
             "stream": True,
         }
+        if self.max_output_tokens is not None:
+            payload["max_tokens"] = self.max_output_tokens
         self._maybe_sampling(payload)
         if tools:
             payload["tools"] = tools
@@ -196,15 +256,28 @@ class OpenAICompatProvider:
         content_parts: list[str] = []
         tool_acc: dict[int, dict[str, Any]] = {}
 
+        payload["stream_options"] = {"include_usage": True}
+        tokens = None
+        final_usage = None
+        finish_reason = None
+        started = perf_counter()
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            async with client.stream(
-                "POST",
-                url,
-                headers=self._headers(),
-                json=payload,
-            ) as resp:
+            async with AsyncExitStack() as stack:
+                resp = await stack.enter_async_context(
+                    client.stream("POST", url, headers=self._headers(), json=payload)
+                )
+                if resp.status_code in (400, 422):
+                    detail = (await resp.aread()).decode("utf-8", errors="replace")
+                    if "stream_options" in detail.lower() or "include_usage" in detail.lower():
+                        await stack.aclose()
+                        payload.pop("stream_options")
+                        started = perf_counter()
+                        resp = await stack.enter_async_context(
+                            client.stream("POST", url, headers=self._headers(), json=payload)
+                        )
                 if resp.status_code >= 400:
                     detail = (await resp.aread()).decode("utf-8", errors="replace")
+                    record("chat", model, perf_counter() - started, status="error")
                     raise httpx.HTTPStatusError(
                         f"{resp.status_code} for {url}: {detail}",
                         request=resp.request,
@@ -220,9 +293,15 @@ class OpenAICompatProvider:
                         obj = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    usage = obj.get("usage")
+                    if isinstance(usage, dict):
+                        final_usage = TokenUsage.from_payload(usage)
+                    if isinstance(usage, dict) and "completion_tokens" in usage:
+                        tokens = usage["completion_tokens"]
                     choices = obj.get("choices") or []
                     if not choices:
                         continue
+                    finish_reason = choices[0].get("finish_reason") or finish_reason
                     delta = choices[0].get("delta") or {}
                     if not isinstance(delta, dict):
                         continue
@@ -244,6 +323,7 @@ class OpenAICompatProvider:
                         content_parts.append(tail)
                         yield StreamEvent(delta=tail)
 
+        record("chat", model, perf_counter() - started, tokens)
         raw_calls = [tool_acc[i] for i in sorted(tool_acc)]
         content = "".join(content_parts) if content_parts else None
         if content is not None:
@@ -252,6 +332,8 @@ class OpenAICompatProvider:
             final=ChatResult(
                 content=content,
                 tool_calls=_parse_tool_calls(raw_calls),
+                usage=final_usage,
+                finish_reason=finish_reason,
             )
         )
 

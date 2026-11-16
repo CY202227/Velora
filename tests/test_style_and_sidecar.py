@@ -84,6 +84,7 @@ def test_sidecar_skips_when_package_missing() -> None:
         start_memory_sidecar=True,
         atom_memory_base_url="http://127.0.0.1:8020",
         preset_id="local-default",
+        memory_required=False,
     )
     with patch.object(sidecar_mod, "health_ok", return_value=False):
         with patch.object(sidecar_mod, "atom_memory_importable", return_value=False):
@@ -129,9 +130,9 @@ def test_load_preset_local_default() -> None:
     assert preset["sidecar"]["sync_llm_to_memory"] is True
 
 
-def test_atom_memory_root_prefers_refs() -> None:
+def test_atom_memory_root_prefers_local_project() -> None:
     root = sidecar_mod.atom_memory_root()
     if root is None:
         pytest.skip("refs/atom_memory not checked out")
-    assert root.name == "atom_memory"
+    assert root.name in ("atom-memory", "atom_memory")
     assert (root / "atom_memory").is_dir()

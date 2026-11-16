@@ -8,6 +8,15 @@ from pathlib import Path
 
 from server.config import Settings
 from server.core.chain.executor import ChainExecutor
+from server.core.agent.store import RunStore
+from server.core.execution.store import ExecutionStore
+from server.core.execution.approvals import ApprovalStore, ApprovalCoordinator
+from server.core.agent.tasks import TaskService
+from server.core.agent.acceptance import AcceptancePolicy
+from server.core.agent.storage_budget import RuntimeStorageBudget
+from server.core.execution.snapshots import SnapshotService
+from server.core.execution.artifacts import OutputStore
+from server.core.execution.environment import ExecutionEnvironment
 from server.core.chain.locks import SessionLockManager
 from server.core.chain.router import TurnRouter
 from server.core.chain.wait_registry import WaitRegistry
@@ -50,7 +59,11 @@ class AppState:
     mcp: McpManager
     skills: SkillManager
     memory_sidecar: MemorySidecar | None = None
+    approvals: ApprovalStore | None = None
+    tasks: TaskService | None = None
     local_llm: LocalLlmService | None = None
+    control_token: str = ""
+    execution: ExecutionEnvironment | None = None
 
 
 _COMPUTER_TOOL_NAMES = (
@@ -59,6 +72,7 @@ _COMPUTER_TOOL_NAMES = (
     "read_file",
     "write_file",
     "list_dir",
+    "read_execution_output",
 )
 
 
@@ -86,6 +100,8 @@ def sync_optional_tools(tools: ToolRegistry, settings: Settings) -> None:
 
 def build_app_state(settings: Settings) -> AppState:
     store = ConversationStore(settings.database_url)
+    budget = RuntimeStorageBudget(store._engine, settings.runtime_database_max_bytes)
+    approvals = ApprovalStore(store._session_factory)
     memory = AtomMemoryClient(
         settings.atom_memory_base_url,
         settings.atom_memory_api_key,
@@ -99,6 +115,8 @@ def build_app_state(settings: Settings) -> AppState:
         settings.llm_base_url,
         settings.llm_api_key,
         use_local_sampling=settings.local_llm_enabled,
+        token_count_path=settings.agent_token_count_path,
+        max_output_tokens=settings.agent_output_reserve,
     )
     wait_registry = WaitRegistry()
     locks = SessionLockManager()
@@ -123,9 +141,15 @@ def build_app_state(settings: Settings) -> AppState:
         LLMNode(
             provider,
             tools=tools,
-            max_tool_rounds=settings.max_tool_rounds,
+            max_steps=settings.agent_max_steps,
+            context_window=settings.agent_context_window,
+            output_reserve=settings.agent_output_reserve,
+            run_timeout=settings.agent_run_timeout_seconds,
+            request_retries=settings.agent_request_retries,
+            summary_output_tokens=settings.agent_summary_output_tokens,
+            stop_policies=(AcceptancePolicy(),),
         ),
-        PostProcessNode(),
+        PostProcessNode(settings.resolve_vertin_script(), settings.vertin_python),
         PersistTurnNode(
             store,
             memory,
@@ -135,13 +159,18 @@ def build_app_state(settings: Settings) -> AppState:
         EmitReplyNode(),
     ]
     executor = ChainExecutor(nodes, wait_registry=wait_registry)
-    router = TurnRouter(executor, locks, wait_registry)
+    router = TurnRouter(executor, locks, wait_registry, run_store=RunStore(store._session_factory, budget.check, settings.runtime_checkpoint_max_bytes),
+                        execution_store=ExecutionStore(store._session_factory, receipts=OutputStore(settings.execution_receipts_dir, settings.execution_receipts_storage_bytes), admission=budget.check),
+                        approvals=ApprovalCoordinator(approvals),
+                        snapshots=SnapshotService(settings.execution_snapshots_dir,
+                                                  max_storage_bytes=settings.execution_snapshot_storage_bytes))
     reminder_job = ReminderJob(store, settings, router)
     local_llm = LocalLlmService(
         settings=settings,
         provider=provider,
         sidecar=LocalLlmSidecar(base_url=settings.local_llm_base_url),
     )
+    tasks = TaskService(store._session_factory, router, settings, budget.check)
     return AppState(
         settings=settings,
         store=store,
@@ -155,4 +184,7 @@ def build_app_state(settings: Settings) -> AppState:
         mcp=mcp,
         skills=skills,
         local_llm=local_llm,
+        approvals=approvals,
+        tasks=tasks,
+        execution=ExecutionEnvironment(settings, router.execution_store, router.snapshots, tasks.busy),
     )

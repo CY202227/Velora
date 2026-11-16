@@ -1260,3 +1260,23 @@ body {
     font-size: 1.3rem;
   }
 }
+
+.operations {
+  width: min(960px, 100%);
+  margin: 0 auto;
+  padding: 24px;
+}
+.operations-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin: 20px 0;
+}
+.operations-metrics article, .operations-event {
+  border: 1px solid currentColor;
+  border-radius: 12px;
+  padding: 14px;
+}
+.operations-metrics strong { font-size: 1.8rem; }
+.operations-event { margin-bottom: 10px; }
+.operations-event audio { width: min(100%, 300px); margin-top: 8px; }

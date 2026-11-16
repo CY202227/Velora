@@ -7,9 +7,10 @@ from server.core.tools.registry import ToolRegistry
 from server.core.tools.wiki import register_wiki_tools
 
 
-def test_wiki_tools_disabled_by_default():
+def test_wiki_tools_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("VELORA_XWIKI_ENABLED", raising=False)
     registry = ToolRegistry()
-    register_wiki_tools(registry, Settings())
+    register_wiki_tools(registry, Settings(_env_file=None))
     assert registry.names() == []
 
 
