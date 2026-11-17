@@ -63,7 +63,7 @@ async def execute_tool_round(ctx: TurnContext, registry: ToolRegistry, messages:
                     record["source_digest"] = hashlib.sha256(source.encode()).hexdigest()
             except (ValueError, AttributeError):
                 pass
-        if ctx.agent_run is not None and tc.name in ("run_shell", "run_python", "read_file", "write_file", "list_dir"):
+        if ctx.agent_run is not None and tc.name in ("run_shell", "run_python", "read_file", "write_file", "list_dir", "command_session"):
             record["execution_id"] = uuid5(NAMESPACE_URL, f"velora:{ctx.agent_run.run_id}:{round_i}:{position}:{tc.id}").hex
         await ctx.save_checkpoint("tool_started")
         previous_execution_id = ctx.extras.get("execution_id")

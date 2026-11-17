@@ -1,6 +1,7 @@
 """MCP config parse, registry merge, name collision, disable."""
 
 from __future__ import annotations
+from server.core.mcp.manager import tool_name
 
 import json
 from pathlib import Path
@@ -120,15 +121,15 @@ async def test_register_mcp_tools_and_execute() -> None:
     client.call_tool = AsyncMock(return_value='{"pong": true}')  # type: ignore[method-assign]
 
     added = mgr.register_tools_from_client_for_tests(reg, client)
-    assert added == ["echo_ping"]
-    assert reg.get("echo_ping") is not None
-    assert set(reg.names()) == {"get_current_time", "create_reminder", "list_reminders", "memory_summary", "memory_search", "memory_expand", "echo_ping"}
+    assert added == [tool_name("fake", "echo_ping")]
+    assert reg.get(tool_name("fake", "echo_ping")) is not None
+    assert set(reg.names()) == {"get_current_time", "create_reminder", "list_reminders", "memory_summary", "memory_search", "memory_expand", tool_name("fake", "echo_ping")}
 
     ctx = TurnContext(
         request=TurnRequest(session_id="s", user_text="x"),
         session_id="s",
     )
-    out = await execute_tool(reg, "echo_ping", "{}", ctx)
+    out = await execute_tool(reg, tool_name("fake", "echo_ping"), "{}", ctx)
     assert "pong" in out
     client.call_tool.assert_awaited_once()
 
@@ -151,7 +152,7 @@ async def test_name_collision_skips_mcp() -> None:
         }
     ]
     added = mgr.register_tools_from_client_for_tests(reg, client)
-    assert added == []
+    assert added == [tool_name("fake", "get_current_time")]
     # builtin still wins
     spec = reg.get("get_current_time")
     assert spec is not None

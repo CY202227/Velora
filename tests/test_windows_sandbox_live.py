@@ -46,6 +46,39 @@ async def run(s, operation, args):
 
 
 @pytest.mark.asyncio
+async def test_native_command_session_intermediate_output_and_cancel(tmp_path):
+    from server.core.chain.context import TurnContext
+    from server.core.chain.types import TurnRequest
+    from server.core.computer.tools import register_computer_tools
+    from server.core.conversation.store import ConversationStore
+    from server.core.execution.store import ExecutionStore
+    from server.core.execution.command_session import close_commands
+    from server.core.tools import ToolRegistry, execute_tool
+    s = settings(tmp_path, timeout=30)
+    s.execution_snapshots_enabled = False
+    db = ConversationStore("sqlite+aiosqlite:///" + (tmp_path / "commands.db").as_posix())
+    await db.init()
+    ctx = TurnContext(TurnRequest("native", "test"), "native")
+    ctx.extras.update(settings=s, execution_store=ExecutionStore(db._session_factory), execution_id="live-command")
+    registry = ToolRegistry()
+    register_computer_tools(registry)
+    try:
+        result = json.loads(await execute_tool(registry, "command_session", {"action": "start", "command": "Write-Output 'live-ready'; Start-Sleep -Seconds 20; Write-Output 'too-late'", "wait_ms": 1}, ctx))
+        assert result["status"] == "running", result
+        for _ in range(12):
+            result = json.loads(await execute_tool(registry, "command_session", {"action": "poll", "execution_id": "live-command", "wait_ms": 1000}, ctx))
+            if "live-ready" in result.get("stdout", ""):
+                break
+        assert result["status"] == "running" and "live-ready" in result["stdout"], result
+        result = json.loads(await execute_tool(registry, "command_session", {"action": "cancel", "execution_id": "live-command", "wait_ms": 10000}, ctx))
+        assert result["status"] == "result_unknown", result
+        assert ctx.extras["command_sessions"]["live-command"]["task"].done()
+    finally:
+        await close_commands(ctx)
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_native_python_imports_workspace_with_future_annotations(tmp_path):
     s = settings(tmp_path)
     assert (await run(s, "write_file", {"path": "local_module.py", "content": "VALUE = 42\n"}))["ok"]

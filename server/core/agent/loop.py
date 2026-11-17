@@ -134,6 +134,7 @@ class AgentLoop:
                 state.enter(RunPhase.REQUESTING)
                 # One streaming request includes tools. A plain reply
                 # (no tool_calls) finishes in that same request — no second generate.
+                tools_payload = list(ctx.extras.get("tools") or [])
                 round_tools = tools_payload if use_tools else None
                 if state.context_window is None:
                     ctx.stop_reason = "context_capacity_unknown"
@@ -200,6 +201,9 @@ class AgentLoop:
                     answer = (state.answer_prefix + (result.content or "")).strip()
                     state.answer_prefix = ""
                     if answer:
+                        if any(not e["task"].done() for e in ctx.extras.get("command_sessions", {}).values()):
+                            messages.extend([{"role": "assistant", "content": answer}, {"role": "user", "content": "Commands are still running. Poll or cancel their command_session handles before finishing."}])
+                            continue
                         decisions = []
                         for policy in self._stop_policies:
                             state.stop_checks += 1
@@ -280,5 +284,9 @@ class AgentLoop:
             ctx.stop_reason = "llm_error"
             await ctx.publish("error", {"message": str(exc)})
             return state.finish(RunStatus.FAILED, ctx.stop_reason)
+
+        finally:
+            from server.core.execution.command_session import close_commands
+            await close_commands(ctx)
 
     _stream_round = staticmethod(stream_round)

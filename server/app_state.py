@@ -67,6 +67,7 @@ class AppState:
 
 
 _COMPUTER_TOOL_NAMES = (
+    "command_session",
     "run_shell",
     "run_python",
     "read_file",

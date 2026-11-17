@@ -172,7 +172,7 @@ async def test_mcp_save_reload_preserves_builtins(tmp_path: Path) -> None:
         },
     ]
     mgr.register_tools_from_client_for_tests(reg, client)
-    assert reg.get("mcp_only_tool") is not None
+    assert reg.get(__import__("server.core.mcp.manager", fromlist=["tool_name"]).tool_name("fake", "mcp_only_tool")) is not None
     assert "时区" in (reg.get("get_current_time").description or "") or "时间" in (
         reg.get("get_current_time").description or ""
     )
@@ -183,7 +183,7 @@ async def test_mcp_save_reload_preserves_builtins(tmp_path: Path) -> None:
     )
     # reload should drop MCP tools, keep computer/builtin
     await mgr.reload(reg)
-    assert reg.get("mcp_only_tool") is None
+    assert reg.get(__import__("server.core.mcp.manager", fromlist=["tool_name"]).tool_name("fake", "mcp_only_tool")) is None
     assert reg.get("run_shell") is not None
     assert reg.get("get_current_time") is not None
     assert reg.get("web_search") is not None

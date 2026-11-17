@@ -116,7 +116,9 @@ class ComposePromptNode:
 
         tools_payload: list[dict[str, Any]] = []
         if self._tools is not None:
-            tools_payload = self._tools.openai_tools(persona.tool_names)
+            tools_payload, search_spec = self._tools.plan(persona.tool_names)
+            if search_spec is not None:
+                ctx.extras["tool_search_spec"] = search_spec
             if ctx.extras.get("proactive"):
                 block = {"create_reminder", "list_reminders"}
                 tools_payload = [

@@ -20,6 +20,7 @@ class ToolSpec:
         default_factory=lambda: {"type": "object", "properties": {}}
     )
     handler: ToolHandler | None = None
+    deferred: bool = False
 
     def openai_schema(self) -> dict[str, Any]:
         return {

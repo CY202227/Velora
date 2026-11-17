@@ -266,6 +266,8 @@ async def _execute(settings, session_id: str, operation: str, arguments: dict, *
     async def drain(stream):
         kept, total = bytearray(), 0
         while chunk := await stream.read(8192):
+            from server.core.execution.command_session import append_output
+            append_output("stdout" if stream is proc.stdout else "stderr", chunk.decode("utf-8", errors="replace"))
             total += len(chunk)
             kept.extend(chunk[:max(0, limit - len(kept))])
         return kept.decode("utf-8", errors="replace"), total > limit

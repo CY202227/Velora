@@ -101,6 +101,8 @@ class RunStore:
         data = await self.read(run_id)
         if data is None:
             raise ValueError("Run checkpoint not found")
+        if any(t.get("name") == "command_session" for t in data["run"]["tool_executions"]):
+            raise ValueError("Turn-owned command sessions cannot be resumed; reconcile execution records without replay")
         if data.get("schema_version") != 1:
             raise ValueError("Unsupported checkpoint schema")
         waiting = (data["run"].get("outcome") or {}).get("status") == "waiting"
@@ -237,6 +239,8 @@ class RunStore:
         data = await self.read(run_id)
         if data is None:
             return None
+        if any(t.get("name") == "command_session" for t in data["run"]["tool_executions"]):
+            return {"recoverable": False, "kind": None, "reason": "turn_owned_command_sessions"}
         if data.get("schema_version") != 1 or data.get("claimed_by") or data.get("credentials_redacted"):
             return {"recoverable": False, "kind": None}
         waiting = (data["run"].get("outcome") or {}).get("status") == "waiting"

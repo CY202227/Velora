@@ -16,6 +16,59 @@ def _settings(ctx: TurnContext):
 
 
 def register_computer_tools(registry: ToolRegistry) -> None:
+    async def command_control(args, ctx):
+        import asyncio
+        from server.core.execution.command_session import progress
+        entries = ctx.extras.setdefault("command_sessions", {})
+        action = args["action"]
+        if action == "start":
+            settings = _settings(ctx)
+            if settings is None or settings.execution_require_approval or args.get("permissions"):
+                return json.dumps({"ok": False, "error": "use synchronous tools for interactive approval"})
+            if not args.get("command", "").strip():
+                return json.dumps({"ok": False, "error": "command required"})
+            if sum(not e["task"].done() for e in entries.values()) >= 4:
+                return json.dumps({"ok": False, "error": "at most four active commands per turn"})
+            identifier = ctx.extras.get("execution_id")
+            if not identifier or identifier in entries:
+                return json.dumps({"ok": False, "error": "missing or reused execution identity"})
+            entry = {"stdout": "", "stderr": ""}
+            from dataclasses import replace
+            command_ctx = replace(ctx, extras=dict(ctx.extras))
+            async def launch():
+                token = progress.set(entry)
+                try:
+                    return await _dispatch("run_shell", {"command": args["command"]}, command_ctx)
+                finally:
+                    progress.reset(token)
+            entry["task"] = asyncio.create_task(launch())
+            entries[identifier] = entry
+        else:
+            identifier = args.get("execution_id")
+            entry = entries.get(identifier)
+            if entry is None:
+                return json.dumps({"ok": False, "error": "unknown command in this turn; do not replay"})
+            if action == "cancel" and not entry["task"].done():
+                entry["task"].cancel()
+        task = entry["task"]
+        try:
+            result = await asyncio.wait_for(asyncio.shield(task), args.get("wait_ms", 1000) / 1000)
+            return result
+        except asyncio.TimeoutError:
+            def safe(text):
+                return text.replace(ctx.llm_api_key, "[redacted]") if ctx.llm_api_key else text
+            return json.dumps({"ok": True, "status": "running", "execution_id": identifier,
+                               "stdout": safe(entry["stdout"]), "stderr": safe(entry["stderr"]), "output_window": "last 16000 characters per stream"})
+        except asyncio.CancelledError:
+            if not task.cancelled():
+                raise
+            return json.dumps({"ok": False, "status": "result_unknown", "execution_id": identifier,
+                               "error": "cancelled; effects are not rolled back; do not replay"})
+
+    registry.register(ToolSpec("command_session", "启动长命令、读取中途输出或取消。同轮内使用句柄；结束本轮会取消未结束命令。需审批时使用 run_shell。", {
+        "type": "object", "properties": {"action": {"type": "string", "enum": ["start", "poll", "cancel"]},
+        "command": {"type": "string"}, "execution_id": {"type": "string"}, "wait_ms": {"type": "integer", "minimum": 1, "maximum": 10000}},
+        "required": ["action"], "additionalProperties": False}, command_control))
     async def read_output(args, ctx):
         import asyncio
         from server.core.execution.artifacts import OutputStore

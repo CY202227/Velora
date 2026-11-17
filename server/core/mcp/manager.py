@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import hashlib
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -21,6 +23,12 @@ from server.core.tools.registry import ToolRegistry
 from server.core.tools.types import ToolSpec
 
 logger = logging.getLogger("velora.mcp")
+
+
+def tool_name(server, name):
+    identity = server + "\0" + name
+    readable = re.sub(r"[^a-zA-Z0-9_-]", "_", server + "__" + name)[:40]
+    return "mcp__" + readable + "_" + hashlib.sha256(identity.encode()).hexdigest()[:16]
 
 
 @dataclass
@@ -58,7 +66,8 @@ class McpManager:
             return
         self.clients[cfg.name] = client
         for tool in client.tools:
-            name = tool["name"]
+            original = tool["name"]
+            name = tool_name(cfg.name, original)
             if registry.get(name) is not None:
                 logger.warning(
                     "MCP tool %r from server %s skipped — name already registered",
@@ -66,7 +75,7 @@ class McpManager:
                     cfg.name,
                 )
                 continue
-            handler = _make_handler(self, cfg.name, name)
+            handler = _make_handler(self, cfg.name, original)
             registry.register(
                 ToolSpec(
                     name=name,
@@ -74,6 +83,7 @@ class McpManager:
                     parameters=tool.get("parameters")
                     or {"type": "object", "properties": {}},
                     handler=handler,
+                    deferred=True,
                 )
             )
             self.registered_tool_names.append(name)
@@ -193,7 +203,8 @@ class McpManager:
         self.clients[client.name] = client
         added: list[str] = []
         for tool in client.tools:
-            name = tool["name"]
+            original = tool["name"]
+            name = tool_name(client.name, original)
             if registry.get(name) is not None:
                 logger.warning(
                     "MCP tool %r from server %s skipped — name already registered",
@@ -207,7 +218,8 @@ class McpManager:
                     description=tool.get("description") or name,
                     parameters=tool.get("parameters")
                     or {"type": "object", "properties": {}},
-                    handler=_make_handler(self, client.name, name),
+                    handler=_make_handler(self, client.name, original),
+                    deferred=True,
                 )
             )
             self.registered_tool_names.append(name)
